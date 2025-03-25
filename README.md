@@ -5,6 +5,20 @@ standalone `opt`-like tool to operate on that dialect.
 
 ## How to build
 
+Build MLIR, LLVM, and Clang
+
+```sh
+mkdir llvm-project/build
+cd llvm-project/build
+cmake -G Ninja ../llvm \
+  -DLLVM_ENABLE_PROJECTS="mlir;clang" \
+  -DLLVM_TARGETS_TO_BUILD="host" \
+  -DLLVM_ENABLE_ASSERTIONS=ON \
+  -DCMAKE_BUILD_TYPE=DEBUG
+ninja
+ninja check-mlir
+```
+
 This setup assumes that you have built LLVM and MLIR in `$BUILD_DIR` and installed them to `$PREFIX`. To build and launch the tests, run
 ```sh
 mkdir build && cd build
