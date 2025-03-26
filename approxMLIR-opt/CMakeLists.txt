@@ -4,7 +4,7 @@ set(LIBS
         ${dialect_libs}
         ${conversion_libs}
         MLIROptLib
-        MLIRStandalone
+        MLIRapproxMLIR
         )
 add_llvm_executable(approxMLIR-opt approxMLIR-opt.cpp)
 

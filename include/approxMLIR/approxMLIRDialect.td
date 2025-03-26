@@ -1,4 +1,4 @@
-//===- StandaloneDialect.td - Standalone dialect -----------*- tablegen -*-===//
+//===- approxMLIRDialect.td - approxMLIR dialect -----------*- tablegen -*-===//
 //
 // This file is licensed under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,31 +6,31 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef STANDALONE_DIALECT
-#define STANDALONE_DIALECT
+#ifndef APPROXMLIR_DIALECT
+#define APPROXMLIR_DIALECT
 
 include "mlir/IR/OpBase.td"
 
 //===----------------------------------------------------------------------===//
-// Standalone dialect definition.
+// approxMLIR dialect definition.
 //===----------------------------------------------------------------------===//
 
-def Standalone_Dialect : Dialect {
-    let name = "standalone";
-    let summary = "A standalone out-of-tree MLIR dialect.";
+def approxMLIR_Dialect : Dialect {
+    let name = "approxMLIR";
+    let summary = "A approxMLIR out-of-tree MLIR dialect.";
     let description = [{
         This dialect is an example of an out-of-tree MLIR dialect designed to
         illustrate the basic setup required to develop MLIR-based tools without
         working inside of the LLVM source tree.
     }];
-    let cppNamespace = "::mlir::standalone";
+    let cppNamespace = "::mlir::approxMLIR";
 }
 
 //===----------------------------------------------------------------------===//
-// Base standalone operation definition.
+// Base approxMLIR operation definition.
 //===----------------------------------------------------------------------===//
 
-class Standalone_Op<string mnemonic, list<Trait> traits = []> :
-        Op<Standalone_Dialect, mnemonic, traits>;
+class approxMLIR_Op<string mnemonic, list<Trait> traits = []> :
+        Op<approxMLIR_Dialect, mnemonic, traits>;
 
-#endif // STANDALONE_DIALECT
+#endif // APPROXMLIR_DIALECT

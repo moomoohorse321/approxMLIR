@@ -1,4 +1,4 @@
-//===- standalone-opt.cpp ---------------------------------------*- C++ -*-===//
+//===- approxMLIR-opt.cpp ---------------------------------------*- C++ -*-===//
 //
 // This file is licensed under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -19,15 +19,15 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
 
-#include "Standalone/StandaloneDialect.h"
-#include "Standalone/StandaloneOpsDialect.cpp.inc"
+#include "approxMLIR/approxMLIRDialect.h"
+#include "approxMLIR/approxMLIROpsDialect.cpp.inc"
 
 int main(int argc, char **argv) {
   mlir::registerAllPasses();
-  // TODO: Register standalone passes here.
+  // TODO: Register approxMLIR passes here.
 
   mlir::DialectRegistry registry;
-  registry.insert<mlir::standalone::StandaloneDialect>();
+  registry.insert<mlir::approxMLIR::approxMLIRDialect>();
   registry.insert<mlir::func::FuncDialect>();
   registry.insert<mlir::arith::ArithDialect>();
   // Add the following to include *all* MLIR Core dialects, or selectively
@@ -36,5 +36,5 @@ int main(int argc, char **argv) {
   // registerAllDialects(registry);
 
   return mlir::asMainReturnCode(
-      mlir::MlirOptMain(argc, argv, "Standalone optimizer driver\n", registry));
+      mlir::MlirOptMain(argc, argv, "approxMLIR optimizer driver\n", registry));
 }

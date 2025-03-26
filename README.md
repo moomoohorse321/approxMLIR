@@ -1,7 +1,7 @@
 # An out-of-tree dialect template for MLIR
 
 This repository contains a template for an out-of-tree [MLIR](https://mlir.llvm.org/) dialect as well as a
-standalone `opt`-like tool to operate on that dialect.
+approxMLIR `opt`-like tool to operate on that dialect.
 
 ## How to build
 
@@ -24,7 +24,7 @@ This setup assumes that you have built LLVM and MLIR in `$BUILD_DIR` and install
 ```sh
 mkdir build && cd build
 cmake -G Ninja .. -DMLIR_DIR=$PWD/../llvm-project/build/lib/cmake/mlir -DLLVM_EXTERNAL_LIT=$PWD/../llvm-project/build/bin/llvm-lit
-cmake --build . --target check-standalone-opt
+cmake --build . --target check-approxMLIR-opt
 ```
 To build the documentation from the TableGen description of the dialect
 operations, run

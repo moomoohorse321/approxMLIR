@@ -1,4 +1,4 @@
-//===- StandaloneDialect.cpp - Standalone dialect ---------------*- C++ -*-===//
+//===- approxMLIRDialect.cpp - approxMLIR dialect ---------------*- C++ -*-===//
 //
 // This file is licensed under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,19 +6,19 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "Standalone/StandaloneDialect.h"
-#include "Standalone/StandaloneOps.h"
+#include "approxMLIR/approxMLIRDialect.h"
+#include "approxMLIR/approxMLIROps.h"
 
 using namespace mlir;
-using namespace mlir::standalone;
+using namespace mlir::approxMLIR;
 
 //===----------------------------------------------------------------------===//
-// Standalone dialect.
+// approxMLIR dialect.
 //===----------------------------------------------------------------------===//
 
-void StandaloneDialect::initialize() {
+void approxMLIRDialect::initialize() {
   addOperations<
 #define GET_OP_LIST
-#include "Standalone/StandaloneOps.cpp.inc"
+#include "approxMLIR/approxMLIROps.cpp.inc"
       >();
 }
