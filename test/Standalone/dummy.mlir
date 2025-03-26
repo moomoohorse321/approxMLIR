@@ -1,4 +1,4 @@
-// RUN: standalone-opt %s | standalone-opt | FileCheck %s
+// RUN: approxMLIR-opt %s | approxMLIR-opt | FileCheck %s
 
 module {
     // CHECK-LABEL: func @bar()

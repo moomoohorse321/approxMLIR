@@ -6,7 +6,7 @@ set(LIBS
         MLIROptLib
         MLIRStandalone
         )
-add_llvm_executable(standalone-opt standalone-opt.cpp)
+add_llvm_executable(approxMLIR-opt approxMLIR-opt.cpp)
 
-llvm_update_compile_flags(standalone-opt)
-target_link_libraries(standalone-opt PRIVATE ${LIBS})
+llvm_update_compile_flags(approxMLIR-opt)
+target_link_libraries(approxMLIR-opt PRIVATE ${LIBS})
