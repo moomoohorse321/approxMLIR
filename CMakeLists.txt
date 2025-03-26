@@ -57,6 +57,11 @@ else ()
   include_directories(${POLYGEIST_TABLEGEN_OUTPUT_DIR})
 endif()
 
+function(append value)
+  foreach(variable ${ARGN})
+    set(${variable} "${${variable}} ${value}" PARENT_SCOPE)
+  endforeach(variable)
+endfunction()
 
 list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
