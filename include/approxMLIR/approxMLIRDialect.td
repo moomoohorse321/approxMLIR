@@ -19,9 +19,8 @@ def approxMLIR_Dialect : Dialect {
     let name = "approxMLIR";
     let summary = "A approxMLIR out-of-tree MLIR dialect.";
     let description = [{
-        This dialect is an example of an out-of-tree MLIR dialect designed to
-        illustrate the basic setup required to develop MLIR-based tools without
-        working inside of the LLVM source tree.
+        The approxMLIR will contains Ops to represent approximate transformation metadata.
+        Such metadata will be used to guide the approximate transformation of the MLIR graph and out-of-tree analysis (e.g. reliability analysis).
     }];
     let cppNamespace = "::mlir::approxMLIR";
 }
