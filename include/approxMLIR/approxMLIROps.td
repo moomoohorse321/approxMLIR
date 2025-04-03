@@ -80,12 +80,12 @@ def approxMLIR_DecideOp : approxMLIR_Op<"decide", [Pure,
         ```
     }];
 
-    let arguments = (ins AnyType: $state, ins AnyType: $params);
+    let arguments = (ins AnyType: $state, AnyType: $params);
 }
 
 
 
-def approxMLIR_KnobOp <string mnemonic, list<Trait> traits = []> : approxMLIR_Op<mnemonic, traits> {
+def approxMLIR_KnobOp : approxMLIR_Op<"template_knob", [Pure]>  {
     let summary = "An error knob Op acting as a wrapper to the transformed Op / Graph.";
     let description = [{
         The `approxMLIR.knob` operation illustrates how to define an error knob that characterizes the transformation of the internal Op / Graph.

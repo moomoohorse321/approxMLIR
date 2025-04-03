@@ -74,5 +74,9 @@ include(sanitizers)
 
 add_subdirectory(include)
 add_subdirectory(lib)
+
+if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 add_subdirectory(test)
+endif()
+
 add_subdirectory(approxMLIR-opt)
