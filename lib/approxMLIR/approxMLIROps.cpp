@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "approxMLIR/approxMLIROps.h"
-#include "approxMLIR/approxMLIRDialect.h"
+#include "approxMLIR/Ops.h"
+#include "approxMLIR/Dialect.h"
 #include "mlir/IR/OpImplementation.h"
 
 #define GET_OP_CLASSES

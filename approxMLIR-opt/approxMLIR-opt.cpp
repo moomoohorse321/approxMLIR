@@ -19,12 +19,14 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
 
-#include "approxMLIR/approxMLIRDialect.h"
+#include "approxMLIR/Dialect.h"
 #include "approxMLIR/approxMLIROpsDialect.cpp.inc"
+#include "approxMLIR/Passes/Passes.h"
 
 int main(int argc, char **argv) {
   mlir::registerAllPasses();
-  // TODO: Register approxMLIR passes here.
+  
+  mlir::approxMLIR::registerConvertSCFToApproxPass();
 
   mlir::DialectRegistry registry;
   registry.insert<mlir::approxMLIR::approxMLIRDialect>();
@@ -35,6 +37,5 @@ int main(int argc, char **argv) {
   // will be *parsed* by the tool, not the one generated
   registerAllDialects(registry);
 
-  return mlir::asMainReturnCode(
-      mlir::MlirOptMain(argc, argv, "approxMLIR optimizer driver\n", registry));
+  return mlir::asMainReturnCode(mlir::MlirOptMain(argc, argv, "approxMLIR optimizer driver\n", registry));
 }

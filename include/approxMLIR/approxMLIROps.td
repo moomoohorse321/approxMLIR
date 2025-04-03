@@ -9,7 +9,7 @@
 #ifndef APPROXMLIR_OPS
 #define APPROXMLIR_OPS
 
-include "approxMLIRDialect.td"
+include "Dialect.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
@@ -39,6 +39,29 @@ def approxMLIR_FooOp : approxMLIR_Op<"foo", [Pure,
         $input attr-dict `:` type($input)
     }];
 }
+
+def approxMLIR_CheckerOp: approxMLIR_Op<"checker", [Pure,
+                                             SameOperandsAndResultType]> {
+    let summary = "A Checker Op to mark the safety checker of the Op.";
+    let description = [{
+        The `approxMLIR.checker` operation illustrates how to define an
+        operation that marks the safety checker of the Op. It uses an
+        operation trait to declare that it has no side effects.
+
+        This operation takes an integer argument and returns an integer.
+
+        Example:
+
+        ```mlir
+        %0 = arith.constant 2 : i32
+        // Apply the checker operation to %0
+        %1 = APPROXMLIR.checker %0 : i32
+        ```
+    }];
+
+    let arguments = (ins AnyType: $state); // state
+}
+
 
 def approxMLIR_ObserveOp : approxMLIR_Op<"observe", [Pure,
                                              SameOperandsAndResultType]> {
@@ -71,6 +94,8 @@ def approxMLIR_DecideOp : approxMLIR_Op<"decide", [Pure,
         operation that marks the decision tree of the Op. It uses an
         operation trait to declare that it has no side effects.
 
+        * thresholds and decisions will be exported to be tuned by out-of-tree autotuner.
+
         Example:
 
         ```mlir
@@ -80,7 +105,7 @@ def approxMLIR_DecideOp : approxMLIR_Op<"decide", [Pure,
         ```
     }];
 
-    let arguments = (ins AnyType: $state, AnyType: $params);
+    let arguments = (ins AnyType: $state, AnyType: $num_thresholds, AnyType: $thresholds, AnyType: $decisions);
 }
 
 
@@ -88,18 +113,29 @@ def approxMLIR_DecideOp : approxMLIR_Op<"decide", [Pure,
 def approxMLIR_KnobOp : approxMLIR_Op<"template_knob", [Pure]>  {
     let summary = "An error knob Op acting as a wrapper to the transformed Op / Graph.";
     let description = [{
-        The `approxMLIR.knob` operation illustrates how to define an error knob that characterizes the transformation of the internal Op / Graph.
+        The `approxMLIR.knob` operation illustrates how to define an error knob that characterizes the transformation of the internal Op / Graph. Error knob unqiuely determines how the internal Op will be lowered.
+
         Goal: 
-            * Given decision tree and a state -> decision for transformation.
-        I/O:
-            The input of this Op is the in edges (defs that will be used in the Op) and the external state.
-            The terminator will return all the out edges (defs in the Op that will be used) for the internal region. [responsibility of front-end / codegen]
+            * Define a decision tree and a (state -> decision) for transformation of the exact Op (i.e. the Op that will be lowered to approximate form).
+            * Define a specification to bridge the MLIR and out-of-tree reliability and QoS analysis tools.
+
+        Components:
+            * Decision tree
+            * Observed state
+            * QoS spec
+            * Reliability spec 
+            * Safety checker
+            * Internal Op [The exact Op]
+        
+        I/O: [responsibility of front-end / codegen]
+            The input of this Op is the in edges (defs that will be used in the Op), the reliability spec (rf), QoS spec (QoS_in, QoS_out). 
+            The terminator will return all the out edges (defs in the Op that will be used) for the internal region. 
 
         Internal Ops (in region):
             The internal state of the Op is marked using ObserveOp, usually placed before the terminator of the Op.
             The decision tree (mapping: state -> transformation) of transformation is mapped as a DecideOp, usually placed at the beginning of the Op.
 
-        Design Choice:
+        Implementation Design Choice:
             Choice 1: Have this KnobOp, and internally define how it should be tranformed. Here, knob_val [int] -> (dialect, Op, transformation) 
             Choice 2: Use this Op as a template to define approxOp for each transformation. The output of decision tree (knob [int]) will directly select a transformation. (i.e. knob_val [int] -> transformation)
         Example:
@@ -135,6 +171,8 @@ def approxForOp : approxMLIR_Op<"for", [Pure]> {
     let results = (outs AnyType:$results);
     let regions = (region AnyRegion:$body);
 } 
+
+// The following region is left for contributors to scale up the approxOps supported in the dialect.
 
 
 #endif // APPROXMLIR_OPS

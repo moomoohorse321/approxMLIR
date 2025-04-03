@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "approxMLIR/approxMLIRDialect.h"
-#include "approxMLIR/approxMLIROps.h"
+#include "approxMLIR/Dialect.h"
+#include "approxMLIR/Ops.h"
 
 using namespace mlir;
 using namespace mlir::approxMLIR;
