@@ -39,10 +39,6 @@ namespace mlir {
     class OpenMPDialect;
     } // end namespace omp
     
-    namespace polygeist {
-    class PolygeistDialect;
-    } // end namespace polygeist
-    
     namespace scf {
     class SCFDialect;
     } // end namespace scf

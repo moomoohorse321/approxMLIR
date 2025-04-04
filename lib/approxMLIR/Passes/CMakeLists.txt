@@ -25,7 +25,6 @@ add_mlir_dialect_library(MLIRApproxMLIRTransforms
   MLIRMemRefDialect
   MLIRNVVMDialect
   MLIRPass
-  MLIRPolygeist
   MLIRSideEffectInterfaces
   MLIRSCFToControlFlow
   MLIRTargetLLVMIRImport
