@@ -60,6 +60,8 @@ def approxMLIR_CheckerOp: approxMLIR_Op<"checker", [Pure,
     }];
 
     let arguments = (ins AnyType: $state); // state
+    
+    let regions = (region AnyRegion:$body); 
 }
 
 
@@ -141,6 +143,17 @@ def approxMLIR_KnobOp : approxMLIR_Op<"template_knob", [Pure]>  {
         Example:
 
         ```mlir
+            approxMLIR.observe %state : i32
+            approx.knob %args, %state, %rf, %QoS_in, %QoS_out : i32[], i32, i32, i32, i32 {
+                approxMLIR.decide %state, %num_thresholds, %thresholds, %decisions : i32, i32, i32[], i32[] {
+                    // some kernels
+                }
+                approxMLIR.checker %state : i32 {
+                    // 2 kernels
+                }
+                // Define the internal Op here
+                %internal_op = approxMLIR.for ...
+            }
         ```
     }];
 
