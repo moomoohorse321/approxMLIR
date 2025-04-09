@@ -2,17 +2,15 @@
 
 module {
 
-  func.func @get_state(%x : i32) -> (f32) {
-    %a = arith.constant 4 : i32
-    %c = arith.cmpi slt, %x, %a : i32
-    %state = scf.if %c -> f32 {
-        %state1 = arith.constant 1.0 : f32
-        scf.yield %state1 : f32
-    } else {
-        %state2 = arith.constant 2.0 : f32
-        scf.yield %state2 : f32
-    }
-    return %state : f32
+
+  func.func @decision_tree(%state: f32, %num_thresholds: i32, 
+                         %thresholds_uppers: tensor<3xf32>,
+                         %thresholds_lowers: tensor<3xf32>,
+                         %decision_values: tensor<3xi32>,
+                         %thresholds: tensor<3xf32>,
+                         %decisions: tensor<3xi32>) {
+    // Implementation
+    return
   }
 
   func.func @knob_start() {
@@ -34,12 +32,23 @@ module {
       %max_val = memref.alloca() : memref<f32>
       affine.store %init_val, %max_val[] : memref<f32>  // No indices for 0D memref
       
+      %i_i32 = arith.index_cast %i : index to i32
+      %i_f32 = arith.sitofp %i_i32 : i32 to f32
+      
       // Find max in the current row
       func.call @knob_start() : () -> ()
-      %i_i32 = arith.index_cast %i : index to i32
-      %6 = func.call @get_state(%i_i32) : (i32) -> (f32)
-      
+
+      %num_thresholds = arith.constant 3 : i32
+      %thresholds_uppers = arith.constant dense<[2.0, 3.0, 4.0]> : tensor<3xf32>
+      %thresholds_lowers = arith.constant dense<[0.0, 2.0, 3.0]> : tensor<3xf32>
+      %decision_values = arith.constant dense<[0, 1, 2]> : tensor<3xi32>
+      %thresholds = arith.constant dense<[0.0, 0.0, 0.0]> : tensor<3xf32>
+      %decisions = arith.constant dense<[0, 0, 0]> : tensor<3xi32>
+
+      func.call @decision_tree(%i_f32, %num_thresholds, %thresholds_uppers, %thresholds_lowers, %decision_values, %thresholds, %decisions) : (f32, i32, tensor<3xf32>, tensor<3xf32>, tensor<3xi32>, tensor<3xf32>, tensor<3xi32>) -> ()
+    
       affine.for %j = 1 to 16 {
+        // here inject the observeOp, decideOp (optionally checkOp)
         %curr_val = affine.load %28[%i, %j] : memref<16x16xf32>
         %prev_max = affine.load %max_val[] : memref<f32>  // No indices for 0D memref
         
