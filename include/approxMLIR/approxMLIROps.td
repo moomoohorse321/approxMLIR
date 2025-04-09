@@ -107,7 +107,7 @@ def approxMLIR_DecideOp : approxMLIR_Op<"decide", [Pure,
         ```
     }];
 
-    let arguments = (ins AnyType: $state, AnyType: $num_thresholds, AnyType: $thresholds, AnyType: $decisions);
+    let arguments = (ins AnyType: $state, AnyType: $num_thresholds,  AnyType: $thresholds_uppers, AnyType: $thresholds_lowers, AnyType: $decision_values, AnyType: $thresholds, AnyType: $decisions);
 }
 
 
@@ -143,7 +143,7 @@ def approxMLIR_KnobOp : approxMLIR_Op<"template_knob", [Pure]>  {
         Example:
 
         ```mlir
-            approxMLIR.observe %state : i32
+            %state = func.call @get_state(%inputs) : (...) -> (f32)
             approx.knob %args, %state, %rf, %QoS_in, %QoS_out : i32[], i32, i32, i32, i32 {
                 approxMLIR.decide %state, %num_thresholds, %thresholds, %decisions : i32, i32, i32[], i32[] {
                     // some kernels
@@ -180,7 +180,7 @@ def approxForOp : approxMLIR_Op<"for", [Pure]> {
         ```
     }];
 
-    let arguments = (ins AnyType:$inputs);
+    let arguments = (ins AnyType:$args, AnyType:$state, AnyType:$rf, AnyType:$QoS_in, AnyType:$QoS_out); // args, state, rf, QoS_in, QoS_out
     let results = (outs AnyType:$results);
     let regions = (region AnyRegion:$body);
 } 

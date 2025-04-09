@@ -11,6 +11,14 @@
 
 #include <memory>
 
+/**
+ * Pass.td defines Ops required for approxMLIR dialect
+ * 
+ * Passes achieve 2 goals:
+ * 1. Codegen from exact Ops [Represent approximate transformation]
+ * 2. Lower approxOps to Exact Ops [perform approximate transformation]
+ */
+
 namespace mlir {
     class PatternRewriter;
     class RewritePatternSet;
