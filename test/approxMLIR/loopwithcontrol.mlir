@@ -36,6 +36,8 @@ module {
       %i_f32 = arith.sitofp %i_i32 : i32 to f32
       
       // Find max in the current row
+
+      // todo for the emitting pass, 
       func.call @knob_start() : () -> ()
 
       %num_thresholds = arith.constant 3 : i32

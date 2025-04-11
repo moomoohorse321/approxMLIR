@@ -23,10 +23,11 @@
 #include "approxMLIR/approxMLIROpsDialect.cpp.inc"
 #include "approxMLIR/Passes/Passes.h"
 
+
 int main(int argc, char **argv) {
   mlir::registerAllPasses();
   
-  mlir::approxMLIR::registerConvertSCFToApproxPass();
+  mlir::approxMLIR::registerEmitApproxPass();
 
   mlir::DialectRegistry registry;
   registry.insert<mlir::approxMLIR::approxMLIRDialect>();

@@ -13,7 +13,7 @@ include "Dialect.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
-def approxMLIR_FooOp : approxMLIR_Op<"foo", [Pure,
+def fooOp : approxMLIR_Op<"foo", [Pure,
                                              SameOperandsAndResultType]> {
     let summary = "A template for defining all ApproxMLIR Ops.";
     let description = [{
@@ -40,7 +40,7 @@ def approxMLIR_FooOp : approxMLIR_Op<"foo", [Pure,
     }];
 }
 
-def approxMLIR_CheckerOp: approxMLIR_Op<"checker", [Pure,
+def checkerOp: approxMLIR_Op<"checker", [Pure,
                                              SameOperandsAndResultType]> {
     let summary = "A Checker Op to mark the safety checker of the Op.";
     let description = [{
@@ -65,30 +65,9 @@ def approxMLIR_CheckerOp: approxMLIR_Op<"checker", [Pure,
 }
 
 
-def approxMLIR_ObserveOp : approxMLIR_Op<"observe", [Pure,
-                                             SameOperandsAndResultType]> {
-    let summary = "An Observe Op to mark the internal state of the Op.";
-    let description = [{
-        The `APPROXMLIR.observe` operation illustrates how to define an
-        operation that marks the internal state of the Op. It uses an
-        operation trait to declare that it has no side effects.
-
-        This operation takes an integer argument and returns an integer.
-
-        Example:
-
-        ```mlir
-        %0 = arith.constant 2 : i32
-        // Apply the observe operation to %0
-        %1 = APPROXMLIR.observe %0 : i32
-        ```
-    }];
-
-    let arguments = (ins AnyType: $state); // state
-}
 
 
-def approxMLIR_DecideOp : approxMLIR_Op<"decide", [Pure,
+def decideOp : approxMLIR_Op<"decide", [Pure,
                                              SameOperandsAndResultType]> {
     let summary = "A Decide Op to mark the decision tree of the Op.";
     let description = [{
@@ -110,6 +89,18 @@ def approxMLIR_DecideOp : approxMLIR_Op<"decide", [Pure,
     let arguments = (ins AnyType: $state, AnyType: $num_thresholds,  AnyType: $thresholds_uppers, AnyType: $thresholds_lowers, AnyType: $decision_values, AnyType: $thresholds, AnyType: $decisions);
 }
 
+def transformOp : approxMLIR_Op<"transform", [Pure]> {
+    let summary = "The markup Op that holds the type of transformation as an int.";
+    let description = [{
+        The end-to-end transformation will consist of 3 stages:
+            1. Lower front-end MLIR to approxMLIR [emit approxOps] -> this is the form which can be auto-tuned
+            2. Lower decideOp to if (flatten the decision tree) [decision transformation] -> after auto-tune, this is a partially lowered form shared between each approx Op
+            2.1 Lower checkerOp (optionally), to be implemented later in the project. [safety transformation] -> after auto-tune, this is a partially lowered form shared between each approx Op
+            3. Within each branch, lower the internal exact Op to approximate form. [approximate transformation] -> final step to lower it to standard dialects by performing approx transformation
+    }];
+
+    let arguments = (ins I32:$transform_type);
+}
 
 
 def approxMLIR_KnobOp : approxMLIR_Op<"template_knob", [Pure]>  {
@@ -123,7 +114,6 @@ def approxMLIR_KnobOp : approxMLIR_Op<"template_knob", [Pure]>  {
 
         Components:
             * Decision tree
-            * Observed state
             * QoS spec
             * Reliability spec 
             * Safety checker
@@ -180,8 +170,8 @@ def approxForOp : approxMLIR_Op<"for", [Pure]> {
         ```
     }];
 
-    let arguments = (ins AnyType:$args, AnyType:$state, AnyType:$rf, AnyType:$QoS_in, AnyType:$QoS_out); // args, state, rf, QoS_in, QoS_out
-    let results = (outs AnyType:$results);
+    let arguments = (ins AnyType:$state, AnyType:$rf, AnyType:$QoS_in, AnyType:$QoS_out, Variadic<AnyType>:$args); //  state, rf, QoS_in, QoS_out, args
+    let results = (outs Variadic<AnyType>:$results);
     let regions = (region AnyRegion:$body);
 } 
 
