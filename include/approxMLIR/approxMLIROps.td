@@ -87,6 +87,8 @@ def decideOp : approxMLIR_Op<"decide", [Pure,
     }];
 
     let arguments = (ins AnyType: $state, AnyType: $num_thresholds,  AnyType: $thresholds_uppers, AnyType: $thresholds_lowers, AnyType: $decision_values, AnyType: $thresholds, AnyType: $decisions);
+
+    let assemblyFormat = "$state `,` $num_thresholds `,` $thresholds_uppers `,` $thresholds_lowers `,` $decision_values `,` $thresholds `,` $decisions attr-dict `:` type($state)";
 }
 
 def transformOp : approxMLIR_Op<"transform", [Pure]> {
