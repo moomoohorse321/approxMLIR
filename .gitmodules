@@ -1,0 +1,3 @@
+[submodule "external-dialects/stablehlo"]
+	path = external-dialects/stablehlo
+	url = https://github.com/openxla/stablehlo
