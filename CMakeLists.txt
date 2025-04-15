@@ -77,7 +77,7 @@ add_subdirectory(lib)
 
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 # only when standalone, we build test and external-dialects
-# add_subdirectory(external-dialects/stablehlo)
+add_subdirectory(external-dialects/stablehlo)
 add_subdirectory(test)
 endif()
 

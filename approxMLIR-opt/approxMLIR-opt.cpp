@@ -24,8 +24,20 @@
 #include "approxMLIR/Passes/Passes.h"
 
 
+#include "stablehlo/conversions/tosa/transforms/Passes.h"
+#include "stablehlo/dialect/Register.h"
+#include "stablehlo/reference/InterpreterOps.h"
+#include "stablehlo/tests/TestUtils.h"
+#include "stablehlo/transforms/Passes.h"
+
 int main(int argc, char **argv) {
   mlir::registerAllPasses();
+
+  mlir::hlo::registerAllTestPasses();
+  mlir::stablehlo::registerPassPipelines();
+  mlir::stablehlo::registerPasses();
+  mlir::tosa::registerStablehloLegalizeToTosaPassPass();
+  mlir::tosa::registerStablehloPrepareForTosaPassPass();
   
   mlir::approxMLIR::registerEmitApproxPass();
 
