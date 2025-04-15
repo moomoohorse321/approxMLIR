@@ -5,6 +5,7 @@ set(LIBS
         ${conversion_libs}
         MLIROptLib
         MLIRapproxMLIR
+        MLIRApproxMLIRTransforms
         )
 add_llvm_executable(approxMLIR-opt approxMLIR-opt.cpp)
 
