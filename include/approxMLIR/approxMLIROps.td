@@ -62,6 +62,8 @@ def checkerOp: approxMLIR_Op<"checker", [Pure,
     let arguments = (ins AnyType: $state); // state
     
     let regions = (region AnyRegion:$body); 
+
+    let assemblyFormat = "$state attr-dict `:` type($state) $body";
 }
 
 
@@ -88,7 +90,8 @@ def decideOp : approxMLIR_Op<"decide", [Pure,
 
     let arguments = (ins AnyType: $state, AnyType: $num_thresholds,  AnyType: $thresholds_uppers, AnyType: $thresholds_lowers, AnyType: $decision_values, AnyType: $thresholds, AnyType: $decisions);
 
-    let assemblyFormat = "$state `,` $num_thresholds `,` $thresholds_uppers `,` $thresholds_lowers `,` $decision_values `,` $thresholds `,` $decisions attr-dict `:` type($state)";
+    let assemblyFormat = "$state `,` $num_thresholds `,` $thresholds_uppers `,` $thresholds_lowers `,` $decision_values `,` $thresholds `,` $decisions attr-dict `:` type($state) `,` type($num_thresholds) `,` type($thresholds_uppers) `,` type($thresholds_lowers) `,` type($decision_values) `,` type($thresholds) `,` type($decisions) ";
+
 }
 
 def transformOp : approxMLIR_Op<"transform", [Pure]> {
@@ -175,6 +178,8 @@ def approxForOp : approxMLIR_Op<"for", [Pure]> {
     let arguments = (ins AnyType:$state, AnyType:$rf, AnyType:$QoS_in, AnyType:$QoS_out, Variadic<AnyType>:$args); //  state, rf, QoS_in, QoS_out, args
     let results = (outs Variadic<AnyType>:$results);
     let regions = (region AnyRegion:$body);
+
+    let assemblyFormat = "$state `,` $rf `,` $QoS_in `,` $QoS_out `,` $args attr-dict `:` type($state) `,` type($rf) `,` type($QoS_in) `,` type($QoS_out) `,` type($args) `->` type($results) $body";
 } 
 
 // The following region is left for contributors to scale up the approxOps supported in the dialect.

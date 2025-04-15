@@ -80,3 +80,4 @@ add_subdirectory(test)
 endif()
 
 add_subdirectory(approxMLIR-opt)
+add_subdirectory(external-dialects/stablehlo)
