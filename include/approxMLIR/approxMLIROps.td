@@ -40,8 +40,7 @@ def fooOp : approxMLIR_Op<"foo", [Pure,
     }];
 }
 
-def checkerOp: approxMLIR_Op<"checker", [Pure,
-                                             SameOperandsAndResultType]> {
+def checkerOp: approxMLIR_Op<"checker", [Pure]> {
     let summary = "A Checker Op to mark the safety checker of the Op.";
     let description = [{
         The `approxMLIR.checker` operation illustrates how to define an
@@ -69,8 +68,7 @@ def checkerOp: approxMLIR_Op<"checker", [Pure,
 
 
 
-def decideOp : approxMLIR_Op<"decide", [Pure,
-                                             SameOperandsAndResultType]> {
+def decideOp : approxMLIR_Op<"decide", [Pure]> {
     let summary = "A Decide Op to mark the decision tree of the Op.";
     let description = [{
         The `approxMLIR.decide` operation illustrates how to define an
@@ -90,7 +88,7 @@ def decideOp : approxMLIR_Op<"decide", [Pure,
 
     let arguments = (ins AnyType: $state, AnyType: $num_thresholds,  AnyType: $thresholds_uppers, AnyType: $thresholds_lowers, AnyType: $decision_values, AnyType: $thresholds, AnyType: $decisions);
 
-    let assemblyFormat = "$state `,` $num_thresholds `,` $thresholds_uppers `,` $thresholds_lowers `,` $decision_values `,` $thresholds `,` $decisions attr-dict `:` type($state) `,` type($num_thresholds) `,` type($thresholds_uppers) `,` type($thresholds_lowers) `,` type($decision_values) `,` type($thresholds) `,` type($decisions) ";
+//    let assemblyFormat = "$state `,` $num_thresholds `,` $thresholds_uppers `,` $thresholds_lowers `,` $decision_values `,` $thresholds `,` $decisions attr-dict `:` type($state) `,` type($num_thresholds) `,` type($thresholds_uppers) `,` type($thresholds_lowers) `,` type($decision_values) `,` type($thresholds) `,` type($decisions) ";
 
 }
 
@@ -105,6 +103,30 @@ def transformOp : approxMLIR_Op<"transform", [Pure]> {
     }];
 
     let arguments = (ins I32:$transform_type);
+}
+
+
+def yieldOp : approxMLIR_Op<"yield", [Pure, Terminator]> {
+    let summary = "A Yield Op to mark the end of the Op.";
+    let description = [{
+        The `approxMLIR.yield` operation illustrates how to define an
+        operation that marks the end of the Op. It uses an
+        operation trait to declare that it has no side effects.
+
+        This operation takes an integer argument and returns an integer.
+
+        Example:
+
+        ```mlir
+        %0 = arith.constant 2 : i32
+        // Apply the yield operation to %0
+        %1 = approxMLIR.yield %0 : i32
+        ```
+    }];
+
+    let arguments = (ins Variadic<AnyType>:$inputs);
+    
+    let assemblyFormat = "$inputs attr-dict `:` type($inputs)";
 }
 
 
@@ -181,6 +203,7 @@ def approxForOp : approxMLIR_Op<"for", [Pure]> {
 
     let assemblyFormat = "$state `,` $rf `,` $QoS_in `,` $QoS_out `,` $args attr-dict `:` type($state) `,` type($rf) `,` type($QoS_in) `,` type($QoS_out) `,` type($args) `->` type($results) $body";
 } 
+
 
 // The following region is left for contributors to scale up the approxOps supported in the dialect.
 

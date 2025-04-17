@@ -34,11 +34,6 @@ module {
       
       %i_i32 = arith.index_cast %i : index to i32
       %i_f32 = arith.sitofp %i_i32 : i32 to f32
-      
-      // Find max in the current row
-
-      // todo for the emitting pass, 
-      func.call @knob_start() : () -> ()
 
       %num_thresholds = arith.constant 3 : i32
       %thresholds_uppers = arith.constant dense<[2.0, 3.0, 4.0]> : tensor<3xf32>
@@ -46,6 +41,8 @@ module {
       %decision_values = arith.constant dense<[0, 1, 2]> : tensor<3xi32>
       %thresholds = arith.constant dense<[0.0, 0.0, 0.0]> : tensor<3xf32>
       %decisions = arith.constant dense<[0, 0, 0]> : tensor<3xi32>
+
+      func.call @knob_start() : () -> ()
 
       func.call @decision_tree(%i_f32, %num_thresholds, %thresholds_uppers, %thresholds_lowers, %decision_values, %thresholds, %decisions) : (f32, i32, tensor<3xf32>, tensor<3xf32>, tensor<3xi32>, tensor<3xf32>, tensor<3xi32>) -> ()
     

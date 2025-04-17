@@ -59,9 +59,9 @@ namespace {
         for (auto indexedResult : llvm::enumerate(op.getResults())) {
             Value result = indexedResult.value();
             results.push_back(result);
-            for (Operation *userOp : result.getUsers()) {
-                userOp->dump();
-            }
+            // for (Operation *userOp : result.getUsers()) {
+            //     userOp->dump();
+            // }
         }
     }
     
@@ -70,15 +70,15 @@ namespace {
         // llvm::outs() << "generate_approx_outs\n";
         for(auto result : results) {
             // llvm::outs() << "result: ";
-            result.dump();
+            // result.dump();
             bool usedOutsideRegion = false;
             if(result.use_empty()) {
                 continue;
             }
-            for(Operation* inRegionOp : inRegionOps) {
-                for (Operation *userOp : result.getUsers()) {
-                    if(userOp != inRegionOp) {
-                        usedOutsideRegion = true;
+            for (Operation *userOp : result.getUsers()) {
+                for(auto inRegionOp : inRegionOps) {
+                    if(userOp == inRegionOp) {
+                        usedOutsideRegion = false;
                         break;
                     }
                 }
@@ -90,6 +90,8 @@ namespace {
                 _results.push_back(result);
             }
         }
+
+        // llvm::outs() << _results.size() << " results\n";
         
         results.clear();
         for(auto result : _results) {
@@ -105,10 +107,12 @@ namespace {
     }
     static Operation* moveMarkedOpsToNewBlock(Operation* op, PatternRewriter &rewriter) {
         Operation* clonedOp = rewriter.clone(*op);
+        for(auto result: llvm::enumerate(op->getResults())) {
+            auto oldResult = op->getResult(result.index());
+            auto newResult = clonedOp->getResult(result.index());
+            rewriter.replaceAllUsesWith(oldResult, newResult);
+        }
         rewriter.eraseOp(op);
-        // Region* region = clonedOp->getParentRegion();
-        // dump_region(region);
-        // llvm::outs() << "-----------------\n";
         return clonedOp;
     }
     
@@ -131,6 +135,7 @@ namespace {
             
             Operation* start_knob = nullptr;
             Operation* end_knob = nullptr;
+            Operation* decision_tree = nullptr;
             
 
             // decision tree arguments
@@ -145,7 +150,8 @@ namespace {
             bool in_knob = false;
             Region* region = nullptr;
             
-            // callOp.dump();
+            callOp.dump();
+            llvm::outs() << "-----------------\n";
             
             StringRef callee = callOp.getCallee();
             
@@ -154,7 +160,7 @@ namespace {
             // We only look at the start and get the parent region.
             if(callee.compare(StringRef("knob_start")) != 0) {
                 // llvm::outs() << "not knob_start\n";
-                return success();
+                return failure();
             }
             
             auto savedInsertPoint = rewriter.saveInsertionPoint();
@@ -162,7 +168,7 @@ namespace {
             
             region = callOp->getParentRegion();
 
-            dump_region(region);
+            // dump_region(region);
 
             /**
              * Step 1: Lower decision tree
@@ -173,7 +179,7 @@ namespace {
                     if(dyn_cast<func::CallOp>(op) && dyn_cast<func::CallOp>(op).getCallee().compare(StringRef("decision_tree")) == 0) {
                         // parse func.call @decision_tree(%i_f32, %num_thresholds, %thresholds_uppers, %thresholds_lowers, %decision_values, %thresholds, %decisions) : (f32, i32, tensor<3xf32>, tensor<3xf32>, tensor<3xi32>, tensor<3xf32>, tensor<3xi32>) -> () 
                         // then create a decideOp, inserting it into the tempBlock
-                        op.dump();
+                        // op.dump();
                         auto callOp = dyn_cast<func::CallOp>(op);
                         // parse the inputs
                         state = callOp.getOperand(0);
@@ -187,14 +193,15 @@ namespace {
                         // create the decideOp
                         // then, we insert the decideOp based on the annotation func.call @decision_tree(%i_f32, %num_thresholds, %thresholds_uppers, %thresholds_lowers, %decision_values, %thresholds, %decisions) : (f32, i32, tensor<3xf32>, tensor<3xf32>, tensor<3xi32>, tensor<3xf32>, tensor<3xi32>) -> ()
                         rewriter.setInsertionPoint(&op);
-                        rewriter.replaceOpWithNewOp<approxMLIR::decideOp>(&op, 
+                        rewriter.replaceOpWithNewOp<approxMLIR::decideOp>(callOp, std::nullopt,
                             state, num_thresholds, thresholds_uppers, thresholds_lowers, decision_values, thresholds, decisions);
+                        decision_tree = &op;
                         break; // otherwise the iteration will fail because Op has been replaced
                     }
                 }
             }
-            llvm::outs() << "done lowering decision tree\n";
-            dump_region(region);
+            // llvm::outs() << "done lowering decision tree\n";
+            // dump_region(region);
 
             // todo: insert the checkerOp
 
@@ -208,7 +215,7 @@ namespace {
                     auto _callOp = dyn_cast<func::CallOp>(op);
 
                     
-                    if(in_knob) {
+                    if(in_knob && &op != decision_tree) {
                         opsToMove.push_back(&op);
                     }
 
@@ -236,31 +243,20 @@ namespace {
 
             
             // step 3: move Ops to the new block
-            for (auto* op : opsToMove) {
-                // op->dump();
-                // then we keep track of all the uses for the internal Ops
-                // also we keep track of all the defs for the internal Ops
-                // such uses and defs will be used to create the KnobOp
-                track_users(*op, users, results);
-                track_producers(*op, producers, producerVals);
-            }
             
-            generate_approx_outs(opsToMove, users, results, resultTypes);
 
-            // for(auto result_type: resultTypes) {
-            //     result_type.dump();
-            // }
-            
             // First emit Ops to the new block, then move the new block to the body of the approxForOp
             Block* tempBlock = rewriter.createBlock(region, {}, std::nullopt, std::nullopt); // side-effect: change insert point to the end of the created block
 
-            llvm::outs() << "moving ops to new block\n";
+            // llvm::outs() << "moving ops to new block\n";
             
-
+            std::vector<Operation*> opsInRegion;
             
             for (auto* op : opsToMove) {
+                // op->dump();
                 // here we use rewriter to move the Ops between the 2 annotations in the new block
                 auto* newOp = moveMarkedOpsToNewBlock(op, rewriter);
+                opsInRegion.push_back(newOp);
                 func::CallOp newCallOp = dyn_cast<func::CallOp>(newOp);
                 if(newCallOp && newCallOp.getCallee().compare(StringRef("knob_end")) == 0) {
                     // we need to replace the end_knob with the approxOp
@@ -268,9 +264,20 @@ namespace {
                 }
             }
 
-            rewriter.replaceOpWithNewOp<scf::YieldOp>(end_knob, results);  
-
+            for (auto* op : opsInRegion) {
+                op->dump();
+                // then we keep track of all the uses for the internal Ops
+                // also we keep track of all the defs for the internal Ops
+                // such uses and defs will be used to create the KnobOp
+                track_users(*op, users, results);
+                track_producers(*op, producers, producerVals);
+            }
             
+            generate_approx_outs(opsInRegion, users, results, resultTypes);
+
+            rewriter.replaceOpWithNewOp<approxMLIR::yieldOp>(end_knob, results);  
+
+            // dump_region(region);
             
             
             // step 4: emit approxOp (producers, state, rf, QoS_in, QoS_out -> users) by replacing the start_knob
@@ -280,17 +287,25 @@ namespace {
             //     tempBlock->addArgument(arg.first, arg.second);
             // }
             
-            tempBlock->dump();
-            rewriter.replaceOpWithNewOp<approxMLIR::approxForOp>(start_knob, TypeRange(ArrayRef<Type>(resultTypes)), state, state, state, state, producerVals); // temporarily set rf, QoS_in, and QoS_out to 0 (todo)
+            // tempBlock->dump(); 
+            llvm::outs() << "------------------\n";
+            rewriter.setInsertionPoint(start_knob);
+
+            auto approxOp = rewriter.replaceOpWithNewOp<approxMLIR::approxForOp>(start_knob, TypeRange(ArrayRef<Type>(resultTypes)), state, state, state, state, producerVals); // temporarily set rf, QoS_in, and QoS_out to 0 (todo)
             
+
             // step 5: move the tempBlock to the approxOp
-            Region & approxRegion = start_knob->getRegion(0);
-            Block* approxBlock = & approxRegion.back();
+            Region & approxRegion = approxOp.getBody();
+            Block* approxBlock = rewriter.createBlock(&approxRegion, approxRegion.end(), std::nullopt, std::nullopt);
+            // approxBlock->dump();
+            // llvm::outs() << "-------!!--\n";
             rewriter.mergeBlocks(tempBlock, approxBlock, std::nullopt);
             
+            // approxOp.dump();
             
             // step 6: finish
             rewriter.restoreInsertionPoint(savedInsertPoint);
+            dump_region(region);
             return success();
         }
     };
@@ -300,20 +315,26 @@ namespace {
 
 
         void runOnOperation() override {
-            std::vector<Operation*> funcsToDo;
-            getOperation()->walk([&](Operation *op) {
-              if (isa<func::FuncOp>(op)) {
-                funcsToDo.push_back(op);
-              }
+            ConversionTarget target(getContext());
+            
+            target.addDynamicallyLegalOp<func::CallOp>([](func::CallOp op) {
+                // if it's a func::CallOp with Callee == "knob_start", we want to convert it
+                return op.getCallee().compare(StringRef("knob_start")) != 0; 
             });
+
+            target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
 
             RewritePatternSet patterns(&getContext());
             patterns.add<AnnocationOpConversion>(&getContext());
-            GreedyRewriteConfig config;
-            config.maxIterations = 1;
-            if(failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns), config))) {
+            // GreedyRewriteConfig config;
+            // config.maxIterations = 1;
+            if(failed(applyPartialConversion(getOperation(), target, std::move(patterns)))) {
                 return signalPassFailure();
             }
+
+            // getOperation()->dump();
+
+            // llvm::outs() << "EmitApproxPass: \n";
         }
     };
 }
