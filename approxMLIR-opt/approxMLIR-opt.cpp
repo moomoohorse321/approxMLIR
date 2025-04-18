@@ -34,11 +34,11 @@
 int main(int argc, char **argv) {
   mlir::registerAllPasses();
 
-  // mlir::hlo::registerAllTestPasses();
-  // mlir::stablehlo::registerPassPipelines();
-  // mlir::stablehlo::registerPasses();
-  // mlir::tosa::registerStablehloLegalizeToTosaPassPass();
-  // mlir::tosa::registerStablehloPrepareForTosaPassPass();
+  mlir::hlo::registerAllTestPasses();
+  mlir::stablehlo::registerPassPipelines();
+  mlir::stablehlo::registerPasses();
+  mlir::tosa::registerStablehloLegalizeToTosaPassPass();
+  mlir::tosa::registerStablehloPrepareForTosaPassPass();
   
   mlir::approxMLIR::registerEmitApproxPass();
 
