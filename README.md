@@ -5,16 +5,7 @@ approxMLIR `opt`-like tool to operate on that dialect.
 
 ## How to build
 
-First, clone the LLVM to a directory called `llvm-project` and initialize the submodules:
-
-```sh
-git clone git@github.com:llvm/llvm-project.git
-cd llvm-project
-# This is the LLVM commit we will use 
-git checkout 26eb4285b56edd8c897642078d91f16ff0fd3472
-```
-
-Build MLIR, LLVM, and Clang
+First, clone the LLVM to a directory called `llvm-project` and initialize the submodules and build Clang, MLIR, and LLVM
 
 ```sh
 git submodule update --init --recursive --progress
