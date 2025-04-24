@@ -12,5 +12,13 @@ def EmitApproxPass : Pass<"emit-approx"> {
     "approxMLIR::approxMLIRDialect"];
 }
 
+def ConfigApproxPass : Pass<"config-approx"> {
+  let summary = "Lower the configured MLIR";
+  let constructor = "mlir::approxMLIR::createConfigApproxPass()";
+  let dependentDialects = ["scf::SCFDialect",
+    "func::FuncDialect", 
+    "approxMLIR::approxMLIRDialect"];
+}
+
 
 #endif // APPROXMLIR_PASSES
