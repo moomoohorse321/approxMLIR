@@ -41,6 +41,7 @@ int main(int argc, char **argv) {
   mlir::tosa::registerStablehloPrepareForTosaPassPass();
   
   mlir::approxMLIR::registerEmitApproxPass();
+  mlir::approxMLIR::registerConfigApproxPass();
 
   mlir::DialectRegistry registry;
   mlir::registerAllExtensions(registry);

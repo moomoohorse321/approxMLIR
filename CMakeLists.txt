@@ -72,6 +72,9 @@ set(LLVM_LIT_ARGS "-sv" CACHE STRING "lit default options")
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake/modules")
 include(sanitizers)
 
+
+add_subdirectory(external-dialects/stablehlo)
+
 add_subdirectory(include)
 add_subdirectory(lib)
 
@@ -80,6 +83,5 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 add_subdirectory(test)
 endif()
 
-add_subdirectory(external-dialects/stablehlo)
 
 add_subdirectory(approxMLIR-opt)
