@@ -13,17 +13,18 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "approxMLIR/Passes/Passes.h"
-#include "approxMLIR/Passes/Utils.h"
+// #include "approxMLIR/Passes/Utils.h"
 #include "llvm/ADT/STLExtras.h"
 #include <memory>
 // set
 #include <set>
+\
 
-using namespace mlir;
-using namespace approxMLIR;
-
-namespace {
-    
+namespace mlir {
+    using namespace approxMLIR;
+    namespace {
+    #define GEN_PASS_DEF_EMITAPPROXPASS
+    #include "approxMLIR/Passes/Passes.h.inc"
     /**
      * https://mlir.llvm.org/docs/Tutorials/UnderstandingTheIRStructure/
      */
@@ -311,8 +312,8 @@ namespace {
     };
 
     struct EmitApproxPass
-    : public EmitApproxPassBase<EmitApproxPass> {
-
+    : public impl::EmitApproxPassBase<EmitApproxPass> {
+        using EmitApproxPassBase::EmitApproxPassBase;
 
         void runOnOperation() override {
             ConversionTarget target(getContext());
@@ -339,14 +340,16 @@ namespace {
     };
 }
 
-std::unique_ptr<Pass> mlir::approxMLIR::createEmitApproxPass() {
-    return std::make_unique<EmitApproxPass>();
+    std::unique_ptr<Pass> createEmitApproxPass() {
+        return std::make_unique<EmitApproxPass>();
+    }
 }
 
-namespace mlir{
-    namespace approxMLIR {
-        void registerEmitApproxPass() {
-            PassRegistration<EmitApproxPass>();
-        }
-    } // namespace approxMLIR
-} // namespace mlir
+
+// namespace mlir{
+//     namespace approxMLIR {
+//         void registerEmitApproxPass() {
+//             PassRegistration<EmitApproxPass>();
+//         }
+//     } // namespace approxMLIR
+// } // namespace mlir

@@ -13,16 +13,20 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "approxMLIR/Passes/Passes.h"
-#include "approxMLIR/Passes/Utils.h"
+// #include "approxMLIR/Passes/Utils.h"
 #include "llvm/ADT/STLExtras.h"
 #include <memory>
 // queue
 #include <queue>
 
-using namespace mlir;
-using namespace approxMLIR;
 
+
+namespace mlir {
+    using namespace approxMLIR;
+    
 namespace {
+    #define GEN_PASS_DEF_CONFIGAPPROXPASS
+    #include "approxMLIR/Passes/Passes.h.inc"
 
     struct ConifgureNN4Func : public OpRewritePattern<func::FuncOp> 
     {
@@ -120,7 +124,8 @@ namespace {
     };
 
     struct ConfigApproxPass
-    : public ConfigApproxPassBase<ConfigApproxPass> {
+    : public impl::ConfigApproxPassBase<ConfigApproxPass> {
+        using ConfigApproxPassBase::ConfigApproxPassBase;
 
         void runOnOperation() override {
             RewritePatternSet patterns(&getContext());
@@ -133,14 +138,16 @@ namespace {
     };
 }
 
-std::unique_ptr<Pass> mlir::approxMLIR::createConfigApproxPass() {
-    return std::make_unique<ConfigApproxPass>();
+    std::unique_ptr<Pass> createConfigApproxPass() {
+        return std::make_unique<ConfigApproxPass>();
+    }
 }
 
-namespace mlir{
-    namespace approxMLIR {
-        void registerConfigApproxPass() {
-            PassRegistration<ConfigApproxPass>();
-        }
-    } // namespace approxMLIR
-} // namespace mlir
+
+// namespace mlir{
+//     namespace approxMLIR {
+//         void registerConfigApproxPass() {
+//             PassRegistration<ConfigApproxPass>();
+//         }
+//     } // namespace approxMLIR
+// } // namespace mlir

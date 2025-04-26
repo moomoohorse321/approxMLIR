@@ -1,3 +1,4 @@
+
 add_mlir_dialect_library(MLIRApproxMLIRTransforms
   EmitApprox.cpp
   ConfigApprox.cpp
@@ -8,6 +9,7 @@ add_mlir_dialect_library(MLIRApproxMLIRTransforms
   DEPENDS
   MLIRapproxMLIROpsIncGen
   MLIRapproxMLIRPassIncGen
+  PassesIncGen
 
   LINK_LIBS PUBLIC
   MLIRAffineDialect

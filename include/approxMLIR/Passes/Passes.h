@@ -23,11 +23,11 @@ namespace mlir {
     class PatternRewriter;
     class RewritePatternSet;
     class DominanceInfo;
+    std::unique_ptr<Pass> createEmitApproxPass();
+    std::unique_ptr<Pass> createConfigApproxPass();
     namespace approxMLIR {
-        std::unique_ptr<Pass> createEmitApproxPass();
-        void registerEmitApproxPass();
-        std::unique_ptr<Pass> createConfigApproxPass();
-        void registerConfigApproxPass();
+        // void registerEmitApproxPass();
+        // void registerConfigApproxPass();
    } // namespace approxMLIR
 } // namespace mlir
 
@@ -77,6 +77,7 @@ namespace mlir {
     class LLVMDialect;
     }
 
+    #define GEN_PASS_DECL
     #define GEN_PASS_REGISTRATION
     #include "approxMLIR/Passes/Passes.h.inc"
 } // end namespace mlir
