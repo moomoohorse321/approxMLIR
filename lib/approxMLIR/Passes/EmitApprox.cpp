@@ -1,4 +1,3 @@
-#include "PassDetails.h"
 
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -18,7 +17,7 @@
 #include <memory>
 // set
 #include <set>
-\
+#include "PassDetails.h"
 
 namespace mlir {
     using namespace approxMLIR;

@@ -1,4 +1,3 @@
-#include "PassDetails.h"
 
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -19,6 +18,7 @@
 // queue
 #include <queue>
 
+#include "PassDetails.h"
 
 
 namespace mlir {

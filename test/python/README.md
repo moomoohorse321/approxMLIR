@@ -1,5 +1,13 @@
 # approxMLIR-IREE testing suite
 
+The testing suite is completely independent (modular building block) to the parent project. The way of testing is 
+* generate the MLIR file from any front-ends / compile mlir using this tesing suite
+* optimize it using the parent project
+* pass the mlir file to the current testing suite
+* load and run it using IREE runtime
+
+
+
 ## Building the testing suite
 You should first install `IREE` in your environment.
 

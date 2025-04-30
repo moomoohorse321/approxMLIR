@@ -38,9 +38,9 @@ def load_data():
 def create_mnist_model():
     model = tf.keras.Sequential([
         tf.keras.layers.Conv2D(32, (3, 3), activation='relu', input_shape=FEATURES_SHAPE),
-        tf.keras.layers.MaxPooling2D((2, 2)),
-        tf.keras.layers.Conv2D(64, (3, 3), activation='relu'),
-        tf.keras.layers.MaxPooling2D((2, 2)),
+        # tf.keras.layers.MaxPooling2D((2, 2)),
+        # tf.keras.layers.Conv2D(64, (3, 3), activation='relu'),
+        # tf.keras.layers.MaxPooling2D((2, 2)),
         tf.keras.layers.Flatten(),
         tf.keras.layers.Dense(128, activation='relu'),
         tf.keras.layers.Dense(NUM_CLASSES, activation='softmax')
@@ -48,37 +48,68 @@ def create_mnist_model():
     return model
 
 # Wrap the model in a tf.Module to compile it with IREE
-class MNISTModule(tf.Module):
-    def __init__(self):
-        super(MNISTModule, self).__init__()
-        self.model = create_mnist_model()
+def create_mnist_module(batch_size=BATCH_SIZE):
+    class MNISTModule(tf.Module):
+        def __init__(self):
+            super(MNISTModule, self).__init__()
+            self.model = create_mnist_model()
+            
+            # Compile the model
+            self.model.compile(
+                optimizer='adam',
+                loss='categorical_crossentropy',
+                metrics=['accuracy']
+            )
+
+        @tf.function(input_signature=[tf.TensorSpec(FEATURES_SHAPE, tf.float32)])
+        def predict(self, x):
+            """Exact prediction function for MNIST. (non-batched)"""
+            batched_x = tf.expand_dims(x, 0)  # Add batch dimension
+            batched_res = self.model(batched_x, training=False)
+            return tf.squeeze(batched_res, 0)  # Remove batch dimension for output
         
-        # Compile the model
-        self.model.compile(
-            optimizer='adam',
-            loss='categorical_crossentropy',
-            metrics=['accuracy']
-        )
+        @tf.function(input_signature=[
+            tf.TensorSpec([batch_size] + FEATURES_SHAPE, tf.float32),
+            tf.TensorSpec([batch_size, NUM_CLASSES], tf.float32)  # One-hot encoded labels
+        ])
+        def learn(self, x, y):
+            """Train the model on batched data."""
+            with tf.GradientTape() as tape:
+                predictions = self.model(x, training=True)
+                loss = tf.keras.losses.categorical_crossentropy(y, predictions)
+            gradients = tape.gradient(loss, self.model.trainable_variables)
+            self.model.optimizer.apply_gradients(zip(gradients, self.model.trainable_variables))
+            return loss
+        
+    return MNISTModule()
 
-    @tf.function(input_signature=[tf.TensorSpec(FEATURES_SHAPE, tf.float32)])
-    def predict(self, x):
-        """Exact prediction function for MNIST."""
-        batched_x = tf.expand_dims(x, 0)  # Add batch dimension
-        batched_res = self.model(batched_x, training=False)
-        return tf.squeeze(batched_res, 0)  # Remove batch dimension for output
-
-def train_exact_model(model, data, epochs=5):
-    """Train the exact model on MNIST data."""
+def train_exact_module(model, data, epochs=5):
+    """Train the trainable model on MNIST data with real-time line updates."""
     (x_train, y_train, y_train_onehot) = data
     
-    # Train the model
-    model.model.fit(
-        x_train, y_train_onehot,
-        epochs=epochs,
-        batch_size=BATCH_SIZE,
-        validation_split=0.1,
-        verbose=1
-    )
+    # Set up training loop
+    steps_per_epoch = len(x_train) // BATCH_SIZE
+    
+    for epoch in range(epochs):
+        epoch_loss = 0.0
+        for step in range(steps_per_epoch):
+            # Get batch
+            batch_start = step * BATCH_SIZE
+            batch_end = batch_start + BATCH_SIZE
+            x_batch = x_train[batch_start:batch_end]
+            y_batch = y_train_onehot[batch_start:batch_end] 
+            
+            # Perform one training step
+            step_loss = model.learn(x_batch, y_batch)
+            epoch_loss += step_loss
+            
+            # Update progress line (overwrites previous line)
+            if step % 10 == 0:
+                print(f"\rEpoch {epoch+1}/{epochs}, Step {step}/{steps_per_epoch}", end="")
+        
+        # Print epoch summary (overwrites previous line)
+        print(f"\rEpoch {epoch+1}/{epochs} complete, Average Loss: {epoch_loss / steps_per_epoch}", end="")
+    print("\nTraining complete.")
     
     return model
 
@@ -176,10 +207,19 @@ def test():
     (x_train, y_train, y_train_onehot), (x_test, y_test, y_test_onehot) = load_data()
     
     # Create and train the exact MNIST module
-    exact_module = MNISTModule()
+    exact_module = create_mnist_module(BATCH_SIZE)
     print("Training the exact model...")
-    exact_module = train_exact_model(exact_module, (x_train, y_train, y_train_onehot), epochs=5)
+    exact_module = train_exact_module(exact_module, (x_train, y_train, y_train_onehot), epochs=5)
     print("Exact model training complete.")
+    
+    # save it to .pth
+    exact_module_path = "mnist_exact_model.pth"
+    tf.saved_model.save(exact_module, exact_module_path)
+    print(f"Exact model saved to {exact_module_path}")
+    
+    # load it back
+    exact_module = tf.saved_model.load(exact_module_path)
+    print("Exact model loaded from saved file.")
     
     # Test constructing an approximate kernel
     print("Creating approximation kernel...")
@@ -203,8 +243,8 @@ def test():
     epochs = 50         # Number of training epochs
     
     # Train the approximate kernel
-    print(f"Training approximation kernel with {num_samples} samples for {epochs} epochs...")
-    func_sub.train_approx(num_samples, epochs)
+    print(f"Training approximation kernel with up to {num_samples} samples for {epochs} epochs...")
+    func_sub.train_approx(use_provided=True, user_data=x_train[:num_samples], epochs=epochs)
     print("Approximation training complete.")
     
     # Compile the approximate kernel to MLIR

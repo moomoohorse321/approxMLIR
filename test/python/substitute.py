@@ -79,7 +79,7 @@ class SubstituteImpl:
         self.input_shape = input_shape
         self.batch_size = batch_size
     
-    def gen_data(self, num_samples):
+    def gen_data(self, use_provided = True, user_data = None, num_samples = None):
         """
         Generate data for training the model.
         
@@ -91,7 +91,13 @@ class SubstituteImpl:
         """
         # Generate random data (in the appropriate range for ResNet)
         # For ResNet, inputs should be in the range expected by preprocess_input
-        data = tf.random.uniform((num_samples,) + tuple(self.input_shape), -1.0, 1.0)
+        if not use_provided:
+            data = tf.random.uniform((num_samples,) + tuple(self.input_shape), -1.0, 1.0)
+        else:
+            if list(user_data.shape[1:]) != list(self.input_shape):
+                raise ValueError(f"Provided data shape {user_data.shape[1:]} does not match expected input shape {self.input_shape}")
+            data = user_data
+            num_samples = data.shape[0]
         
         # Get labels by calling the exact function
         exact_func = getattr(self.exact_module, self.func_name)
@@ -173,19 +179,29 @@ class FuncSubstitute:
         self.batch_size = batch_size
         self.impl = SubstituteImpl(approx_kernel, exact_module, self.func_name, input_shape, batch_size)
     
-    def train_approx(self, num_samples, epochs=5):
+    def train_approx(self, use_provided=True, user_data=None, num_samples=None, epochs=5):
         """
         Train the approximate kernel.
         
         Args:
-            num_samples: Number of samples to generate for training
+            use_provided: Whether to use provided user data for training
+            user_data: User-provided data for training (if use_provided is True)
+            num_samples: Number of samples to generate for training (if use_provided is False)
             epochs: Number of training epochs
             
         Returns:
             Trained approximate kernel
         """
-        print(f"Generating {num_samples} training samples...")
-        train_data, train_labels = self.impl.gen_data(num_samples)
+        if use_provided and user_data is None:
+            raise ValueError("user_data must be provided if use_provided is True")
+        if not use_provided and num_samples is None:
+            raise ValueError("num_samples must be provided if use_provided is False")
+        
+        train_data, train_labels = self.impl.gen_data(
+            use_provided=use_provided,
+            user_data=user_data,
+            num_samples=num_samples
+        )
         print("Data generation complete.")
         
         model = self.impl.train_model(train_data, train_labels, epochs)
@@ -243,13 +259,11 @@ class FuncSubstitute:
         
         return mlir_path
     
-    def load_exact(self, mlir_path):
+    def load_mlir_from_file(self, mlir_path):
         backend_choice = "iree_llvmcpu (CPU)" #@param [ "iree_vmvx (CPU)", "iree_llvmcpu (CPU)", "iree_vulkan (GPU/SwiftShader)" ]
         backend_choice = backend_choice.split(" ")[0]
         backend = module_utils.BackendInfo(backend_choice)
-
         print("Backend choice:", backend_choice)
-        backend = module_utils.BackendInfo(backend_choice)
         
         with open(mlir_path, "r") as f:
             mlir_module = f.read()
