@@ -259,7 +259,8 @@ class FuncSubstitute:
         
         return mlir_path
     
-    def load_mlir_from_file(self, mlir_path):
+    @staticmethod
+    def load_mlir_from_file(mlir_path):
         backend_choice = "iree_llvmcpu (CPU)" #@param [ "iree_vmvx (CPU)", "iree_llvmcpu (CPU)", "iree_vulkan (GPU/SwiftShader)" ]
         backend_choice = backend_choice.split(" ")[0]
         backend = module_utils.BackendInfo(backend_choice)

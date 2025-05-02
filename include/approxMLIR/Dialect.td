@@ -10,6 +10,8 @@
 #define APPROXMLIR_DIALECT
 
 include "mlir/IR/OpBase.td"
+include "mlir/IR/EnumAttr.td"
+include "mlir/IR/AttrTypeBase.td"
 
 //===----------------------------------------------------------------------===//
 // approxMLIR dialect definition.

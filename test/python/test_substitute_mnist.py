@@ -38,9 +38,9 @@ def load_data():
 def create_mnist_model():
     model = tf.keras.Sequential([
         tf.keras.layers.Conv2D(32, (3, 3), activation='relu', input_shape=FEATURES_SHAPE),
-        # tf.keras.layers.MaxPooling2D((2, 2)),
-        # tf.keras.layers.Conv2D(64, (3, 3), activation='relu'),
-        # tf.keras.layers.MaxPooling2D((2, 2)),
+        tf.keras.layers.MaxPooling2D((2, 2)),
+        tf.keras.layers.Conv2D(64, (3, 3), activation='relu'),
+        tf.keras.layers.MaxPooling2D((2, 2)),
         tf.keras.layers.Flatten(),
         tf.keras.layers.Dense(128, activation='relu'),
         tf.keras.layers.Dense(NUM_CLASSES, activation='softmax')
@@ -57,7 +57,7 @@ def create_mnist_module(batch_size=BATCH_SIZE):
             # Compile the model
             self.model.compile(
                 optimizer='adam',
-                loss='categorical_crossentropy',
+                loss=tf.keras.losses.KLDivergence(),
                 metrics=['accuracy']
             )
 
@@ -76,9 +76,10 @@ def create_mnist_module(batch_size=BATCH_SIZE):
             """Train the model on batched data."""
             with tf.GradientTape() as tape:
                 predictions = self.model(x, training=True)
-                loss = tf.keras.losses.categorical_crossentropy(y, predictions)
+                loss = tf.keras.losses.KLDivergence()(y, predictions)
             gradients = tape.gradient(loss, self.model.trainable_variables)
             self.model.optimizer.apply_gradients(zip(gradients, self.model.trainable_variables))
+            
             return loss
         
     return MNISTModule()
@@ -113,7 +114,7 @@ def train_exact_module(model, data, epochs=5):
     
     return model
 
-def test_comparison(self, test_images, test_labels, num_samples=10):
+def test_comparison(self, test_images, test_labels, num_samples=10, use_mlir_approx=True):
     """
     Compare the exact and approximate models on test images.
     
@@ -141,8 +142,11 @@ def test_comparison(self, test_images, test_labels, num_samples=10):
         exact_pred = np.argmax(exact_result.numpy())
         
         # Get approximate prediction
-        approx_result = self.approx_kernel.approx_predict(test_image)
-        approx_pred = np.argmax(approx_result.numpy())
+        if use_mlir_approx:
+            approx_result = self.approx_kernel.approx_predict(test_image).to_host()
+        else:
+            approx_result = self.approx_kernel.approx_predict(test_image).numpy()
+        approx_pred = np.argmax(approx_result)
         
         # Update counters
         if exact_pred == true_label:
@@ -165,7 +169,7 @@ def test_comparison(self, test_images, test_labels, num_samples=10):
         plt.title(f"Exact: {exact_pred}" + (" ✓" if exact_pred == true_label else " ✗"))
         
         plt.subplot(num_samples, 3, i*3 + 3)
-        plt.bar(range(NUM_CLASSES), approx_result.numpy())
+        plt.bar(range(NUM_CLASSES), approx_result)
         plt.title(f"Approx: {approx_pred}" + (" ✓" if approx_pred == true_label else " ✗"))
     
     plt.tight_layout()
@@ -191,7 +195,7 @@ def test_comparison(self, test_images, test_labels, num_samples=10):
         
         # Get approximate prediction
         approx_result = self.approx_kernel.approx_predict(test_image)
-        approx_pred = np.argmax(approx_result.numpy())
+        approx_pred = np.argmax(approx_result)
         
         # Update counters
         if exact_pred == true_label:
@@ -212,8 +216,8 @@ def test():
     exact_module = train_exact_module(exact_module, (x_train, y_train, y_train_onehot), epochs=5)
     print("Exact model training complete.")
     
-    # save it to .pth
-    exact_module_path = "mnist_exact_model.pth"
+    # # save it to .pth
+    exact_module_path = "mnist_exact_model"
     tf.saved_model.save(exact_module, exact_module_path)
     print(f"Exact model saved to {exact_module_path}")
     
@@ -259,5 +263,34 @@ def test():
     
     return exact_module, func_sub
 
+def test_load():
+    (x_train, y_train, y_train_onehot), (x_test, y_test, y_test_onehot) = load_data()
+    
+    exact_module_path = "mnist_exact_model"
+    # load it back
+    exact_module = tf.saved_model.load(exact_module_path)
+    print("Exact model loaded from saved file.")
+    
+    # Test constructing an approximate kernel
+    print("Creating approximation kernel...")
+    test_kernel = get_approx_kernel(FEATURES_SHAPE, OUTPUT_SHAPE, BATCH_SIZE)
+    print("Successfully created approximation kernel")
+    
+    # Create the function substitution handler
+    func_sub = FuncSubstitute(
+        exact_module=exact_module,
+        approx_kernel=FuncSubstitute.load_mlir_from_file("output.mlir"),
+        input_shape=FEATURES_SHAPE,
+        batch_size=BATCH_SIZE
+    )
+    
+    func_sub.test_comparison = test_comparison.__get__(func_sub)
+    
+    func_sub.test_comparison(
+        x_test, y_test, num_samples=10
+    )
+    
+    
+
 if __name__ == "__main__":
-    test()
+    test_load()

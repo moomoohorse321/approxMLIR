@@ -9,6 +9,8 @@
 #ifndef APPROXMLIR_APPROXMLIROPS_H
 #define APPROXMLIR_APPROXMLIROPS_H
 
+#include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/Bytecode/BytecodeOpInterface.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/OpDefinition.h"

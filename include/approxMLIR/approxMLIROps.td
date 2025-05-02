@@ -12,6 +12,7 @@
 include "Dialect.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
+include "mlir/IR/SymbolInterfaces.td"
 
 def fooOp : approxMLIR_Op<"foo", [Pure,
                                              SameOperandsAndResultType]> {
@@ -92,18 +93,24 @@ def decideOp : approxMLIR_Op<"decide", [Pure]> {
 
 }
 
-def transformOp : approxMLIR_Op<"transform", [Pure]> {
+def transformOp : approxMLIR_Op<"transform"> {
     let summary = "The markup Op that holds the type of transformation as an int.";
     let description = [{
-        The end-to-end transformation will consist of 3 stages:
+        The end-to-end transformation will consist of 3 stages, transformOp is responsible for the 3rd stage.
             1. Lower front-end MLIR to approxMLIR [emit approxOps] -> this is the form which can be auto-tuned
             2. Lower decideOp to if (flatten the decision tree) [decision transformation] -> after auto-tune, this is a partially lowered form shared between each approx Op
             2.1 Lower checkerOp (optionally), to be implemented later in the project. [safety transformation] -> after auto-tune, this is a partially lowered form shared between each approx Op
             3. Within each branch, lower the internal exact Op to approximate form. [approximate transformation] -> final step to lower it to standard dialects by performing approx transformation
-    }];
 
-    let arguments = (ins I32:$transform_type);
+        Example:
+        ```mlir
+             "approxMLIR.transform"() <{knob_val = 1 : i32, transform_type = "NNsubstitute"}> : () -> ()
+        ```
+    }];
+    let arguments = (ins SymbolNameAttr: $transform_type, I32Attr:$knob_val);
 }
+
+
 
 
 def yieldOp : approxMLIR_Op<"yield", [Pure, Terminator]> {

@@ -28,9 +28,9 @@ namespace mlir {
         #define GEN_PASS_DEF_CONFIGAPPROXPASS
         #include "approxMLIR/Passes/Passes.h.inc"
 
-        struct ConifgureNN4Func : public OpRewritePattern<func::FuncOp> 
+        struct ConifgureNN4Func : public OpRewritePattern<approxMLIR::transformOp> 
         {
-            using OpRewritePattern<func::FuncOp>::OpRewritePattern;
+            using OpRewritePattern<approxMLIR::transformOp>::OpRewritePattern;
             
         
             static void erase_region(Region* region, PatternRewriter &rewriter) {
@@ -82,13 +82,15 @@ namespace mlir {
              * We simply erase the body and inline the body of the approximate function. (The approx function shouldn't be moved)
              */
             LogicalResult
-            matchAndRewrite(func::FuncOp funcOp, PatternRewriter &rewriter) const final {
-                llvm::outs() << "Configuring function: " << funcOp.getName() << "\n";
-                static int debug = 0;
-                if (debug++ > 0) {
-                    return failure(); // for debugging purposes, we can stop here.
+            matchAndRewrite(approxMLIR::transformOp transformOp, PatternRewriter &rewriter) const final {
+                
+                // auto inserted = rewriter.create<approxMLIR::transformOp>(funcOp.getLoc(), StringRef("NNsubstitute"), 1);
+                auto funcOp = transformOp->getParentOfType<func::FuncOp>();
+                if (!funcOp) {
+                    // rewriter.eraseOp(transformOp);
+                    llvm::errs() << "Error: transformOp is not inside a function.\n";
+                    return failure();
                 }
-                // Find the approximate function
                 auto approxFuncName = "approx_" + funcOp.getName().str();
                 // we go to the definition (in `BuiltinOps.h.inc`) to see how to dump the region of ModuleOp
                 Region &moduleRegion = funcOp->getParentOfType<ModuleOp>().getBodyRegion();
@@ -107,18 +109,19 @@ namespace mlir {
                     }
                 }
                 if (!approxFunc) {
-                    return rewriter.notifyMatchFailure(funcOp, "Approximate function not found");
+                    // rewriter.eraseOp(transformOp);
+                    llvm::errs() << "Error: Approximate function " << approxFuncName << " not found.\n";
+                    return failure(); // No approximate function found, nothing to do.
                 }
+                llvm::outs() << "Found approximate function: " << approxFunc.getName() << "\n";
 
-                // Erase the body of the original function
                 Region &replacedRegion = funcOp.getBody();
                 erase_region(&replacedRegion, rewriter);
 
-                // Inline the call
                 rewriter.cloneRegionBefore(approxFunc.getBody(), replacedRegion, funcOp.getBody().end());
-
-                funcOp.dump();
                 
+                // rewriter.eraseOp(transformOp);
+
                 return success();
             }
         };

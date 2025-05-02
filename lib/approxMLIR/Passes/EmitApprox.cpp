@@ -155,8 +155,9 @@ namespace mlir {
             
             StringRef callee = callOp.getCallee();
             
+            
             // llvm::outs() << callee << "\n";
-
+            
             // We only look at the start and get the parent region.
             if(callee.compare(StringRef("knob_start")) != 0) {
                 // llvm::outs() << "not knob_start\n";
@@ -167,7 +168,7 @@ namespace mlir {
             
             
             region = callOp->getParentRegion();
-
+            
             // dump_region(region);
 
             /**
@@ -274,6 +275,9 @@ namespace mlir {
             }
             
             generate_approx_outs(opsInRegion, users, results, resultTypes);
+
+            // rewriter.create<approxMLIR::transformOp>(callOp.getLoc(), StringRef("NNsubstitute"), 1);
+            
 
             rewriter.replaceOpWithNewOp<approxMLIR::yieldOp>(end_knob, results);  
 
