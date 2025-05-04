@@ -343,16 +343,16 @@ namespace mlir {
     };
 }
 
-    std::unique_ptr<Pass> createEmitApproxPass() {
-        return std::make_unique<EmitApproxPass>();
-    }
 }
 
 
-// namespace mlir{
-//     namespace approxMLIR {
+namespace mlir{
+        namespace approxMLIR {
+            std::unique_ptr<Pass> createEmitApproxPass() {
+                return std::make_unique<EmitApproxPass>();
+            }
 //         void registerEmitApproxPass() {
 //             PassRegistration<EmitApproxPass>();
 //         }
-//     } // namespace approxMLIR
-// } // namespace mlir
+    } // namespace approxMLIR
+} // namespace mlir

@@ -141,16 +141,17 @@ namespace mlir {
         };
     }
 
-    std::unique_ptr<Pass> createConfigApproxPass() {
-        return std::make_unique<ConfigApproxPass>();
-    }
+    
 }
 
 
-// namespace mlir{
-//     namespace approxMLIR {
-//         void registerConfigApproxPass() {
-//             PassRegistration<ConfigApproxPass>();
-//         }
-//     } // namespace approxMLIR
-// } // namespace mlir
+namespace mlir{
+    namespace approxMLIR {
+        std::unique_ptr<Pass> createConfigApproxPass() {
+            return std::make_unique<ConfigApproxPass>();
+        }
+        // void registerConfigApproxPass() {
+        //     PassRegistration<ConfigApproxPass>();
+        // }
+    } // namespace approxMLIR
+} // namespace mlir

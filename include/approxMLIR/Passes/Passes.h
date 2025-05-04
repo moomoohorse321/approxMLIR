@@ -23,9 +23,9 @@ namespace mlir {
     class PatternRewriter;
     class RewritePatternSet;
     class DominanceInfo;
-    std::unique_ptr<Pass> createEmitApproxPass();
-    std::unique_ptr<Pass> createConfigApproxPass();
     namespace approxMLIR {
+        std::unique_ptr<Pass> createEmitApproxPass();
+        std::unique_ptr<Pass> createConfigApproxPass();
         // void registerEmitApproxPass();
         // void registerConfigApproxPass();
    } // namespace approxMLIR
