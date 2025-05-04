@@ -8,6 +8,7 @@ add_mlir_dialect_library(MLIRApproxMLIRTransforms
   DEPENDS
   MLIRapproxMLIROpsIncGen
   MLIRapproxMLIRPassIncGen
+  PassesIncGen
 
   LINK_LIBS PUBLIC
   MLIRAffineDialect

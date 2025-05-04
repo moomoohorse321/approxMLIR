@@ -77,6 +77,7 @@ namespace mlir {
     class LLVMDialect;
     }
 
+    #define GEN_PASS_DECL
     #define GEN_PASS_REGISTRATION
     #include "approxMLIR/Passes/Passes.h.inc"
 } // end namespace mlir
