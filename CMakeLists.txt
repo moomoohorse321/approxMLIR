@@ -35,6 +35,9 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   message(STATUS "Using MLIRConfig.cmake in: ${MLIR_DIR}")
   message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
   message(STATUS "Using ClangConfig.cmake in: ${CLANG_DIR}")
+  set(APPROX_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+  set(APPROX_BINARY_DIR ${CMAKE_SOURCE_DIR}/build)
+  set(APPROXMLIR_TABLEGEN_OUTPUT_DIR ${LLVM_BINARY_DIR}/tools/approxMLIR/include)
 else ()
   set(LLVM_SOURCE_DIR ${LLVM_MAIN_SRC_DIR})
   set(MLIR_MAIN_SRC_DIR ${LLVM_MAIN_SRC_DIR}/../mlir)
@@ -44,8 +47,8 @@ else ()
   set(MLIR_CMAKE_DIR ${MLIR_MAIN_SRC_DIR}/cmake/modules)
   set(MLIR_TABLEGEN_EXE $<TARGET_FILE:mlir-tblgen>)
   set(MLIR_TABLEGEN_OUTPUT_DIR ${LLVM_BINARY_DIR}/tools/mlir/include)
-  set(PROJECT_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
-  set(PROJECT_BINARY_DIR ${CMAKE_SOURCE_DIR}/build/approxMLIR)
+  set(APPROX_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+  set(APPROX_BINARY_DIR ${CMAKE_SOURCE_DIR}/build/approxMLIR)
   set(APPROXMLIR_TABLEGEN_OUTPUT_DIR ${LLVM_BINARY_DIR}/tools/approxMLIR/include)
   include_directories(${APPROXMLIR_TABLEGEN_OUTPUT_DIR})
 endif()
@@ -56,6 +59,8 @@ function(append value)
   endforeach(variable)
 endfunction()
 
+
+
 list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
 include(TableGen)
@@ -65,14 +70,14 @@ include(HandleLLVMOptions)
 
 include_directories(${LLVM_INCLUDE_DIRS})
 include_directories(${MLIR_INCLUDE_DIRS})
-include_directories(${PROJECT_SOURCE_DIR}/include)
-include_directories(${PROJECT_BINARY_DIR}/include)
+include_directories(${APPROX_SOURCE_DIR}/include)
+include_directories(${APPROX_BINARY_DIR}/include)
 link_directories(${LLVM_BUILD_LIBRARY_DIR})
 add_definitions(${LLVM_DEFINITIONS})
 
 set(LLVM_LIT_ARGS "-sv" CACHE STRING "lit default options")
-list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake/modules")
-include(sanitizers)
+list(APPEND CMAKE_MODULE_PATH "${APPROX_SOURCE_DIR}/cmake/modules")
+# include(sanitizers)
 
 
 
@@ -87,3 +92,14 @@ endif()
 
 
 add_subdirectory(approxMLIR-opt)
+
+if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  # Configure torch-mlir - disable Python and tests
+  # Force disable StableHLO in torch-mlir
+  set(TORCH_MLIR_ENABLE_STABLEHLO OFF CACHE BOOL "Disable StableHLO dialect in Torch-MLIR" FORCE)
+  set(TORCH_MLIR_ENABLE_TESTS OFF CACHE BOOL "Disable torch-mlir tests")
+  set(TORCH_MLIR_ENABLE_PYTHON_BINDINGS OFF CACHE BOOL "Disable Python bindings for Torch-MLIR")
+  set(TORCH_MLIR_ENABLE_JIT_IR_IMPORTER OFF CACHE BOOL "Disable JIT IR importer")
+  set(TORCH_MLIR_ENABLE_PYTORCH_EXTENSIONS OFF CACHE BOOL "Disable PyTorch extensions")
+  add_subdirectory(external-dialects/torch-mlir)
+endif()
