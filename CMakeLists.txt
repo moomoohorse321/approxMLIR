@@ -35,6 +35,11 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   message(STATUS "Using MLIRConfig.cmake in: ${MLIR_DIR}")
   message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
   message(STATUS "Using ClangConfig.cmake in: ${CLANG_DIR}")
+
+  set(APPROX_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+  set(APPROX_BINARY_DIR ${CMAKE_SOURCE_DIR}/build)
+  set(APPROXMLIR_TABLEGEN_OUTPUT_DIR ${LLVM_BINARY_DIR}/tools/approxMLIR/include)
+
 else ()
   set(LLVM_SOURCE_DIR ${LLVM_MAIN_SRC_DIR})
   set(MLIR_MAIN_SRC_DIR ${LLVM_MAIN_SRC_DIR}/../mlir)
