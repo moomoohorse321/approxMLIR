@@ -142,23 +142,18 @@ namespace mlir {
 
             // decision tree arguments
             Value state;
-            Value num_thresholds;
-            Value thresholds_uppers;
-            Value thresholds_lowers;
-            Value decision_values;
-            Value thresholds;
-            Value decisions;
+            int num_thresholds;
+            std::vector<int> thresholds_uppers = {4};
+            std::vector<int> thresholds_lowers = {0};
+            std::vector<int> decision_values = {0, 1};
+            std::vector<int> thresholds = {2};
+            std::vector<int> decisions = {0, 1};
 
             bool in_knob = false;
             Region* region = nullptr;
             
-            callOp.dump();
-            llvm::outs() << "-----------------\n";
             
             StringRef callee = callOp.getCallee();
-            
-            
-            // llvm::outs() << callee << "\n";
             
             // We only look at the start and get the parent region.
             if(callee.compare(StringRef("knob_start")) != 0) {
@@ -171,7 +166,6 @@ namespace mlir {
             
             region = callOp->getParentRegion();
             
-            // dump_region(region);
 
             /**
              * Step 1: Lower decision tree
@@ -180,21 +174,10 @@ namespace mlir {
             for (Block &block : region->getBlocks()) {
                 for (Operation &op : block.getOperations()) {
                     if(dyn_cast<func::CallOp>(op) && dyn_cast<func::CallOp>(op).getCallee().compare(StringRef("decision_tree")) == 0) {
-                        // parse func.call @decision_tree(%i_f32, %num_thresholds, %thresholds_uppers, %thresholds_lowers, %decision_values, %thresholds, %decisions) : (f32, i32, tensor<3xf32>, tensor<3xf32>, tensor<3xi32>, tensor<3xf32>, tensor<3xi32>) -> () 
-                        // then create a decideOp, inserting it into the tempBlock
-                        // op.dump();
                         auto callOp = dyn_cast<func::CallOp>(op);
                         // parse the inputs
                         state = callOp.getOperand(0);
-                        num_thresholds = callOp.getOperand(1);
-                        thresholds_uppers = callOp.getOperand(2);
-                        thresholds_lowers = callOp.getOperand(3);
-                        decision_values = callOp.getOperand(4);
-                        thresholds = callOp.getOperand(5);
-                        decisions = callOp.getOperand(6);
                         
-                        // create the decideOp
-                        // then, we insert the decideOp based on the annotation func.call @decision_tree(%i_f32, %num_thresholds, %thresholds_uppers, %thresholds_lowers, %decision_values, %thresholds, %decisions) : (f32, i32, tensor<3xf32>, tensor<3xf32>, tensor<3xi32>, tensor<3xf32>, tensor<3xi32>) -> ()
                         rewriter.setInsertionPoint(&op);
                         rewriter.replaceOpWithNewOp<approxMLIR::decideOp>(callOp, std::nullopt,
                             state, num_thresholds, thresholds_uppers, thresholds_lowers, decision_values, thresholds, decisions);
@@ -203,9 +186,6 @@ namespace mlir {
                     }
                 }
             }
-            // llvm::outs() << "done lowering decision tree\n";
-            // dump_region(region);
-
             // todo: insert the checkerOp
 
         
@@ -238,13 +218,6 @@ namespace mlir {
             if(start_knob == nullptr || end_knob == nullptr) {
                 return failure();
             }
-
-            // start_knob->dump();
-            // end_knob->dump();
-
-            llvm::outs() << "found knob_start and knob_end\n";
-
-            
             // step 3: move Ops to the new block
             
 

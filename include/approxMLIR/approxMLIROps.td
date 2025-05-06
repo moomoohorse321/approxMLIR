@@ -67,8 +67,6 @@ def checkerOp: approxMLIR_Op<"checker", [Pure]> {
 }
 
 
-
-
 def decideOp : approxMLIR_Op<"decide", [Pure]> {
     let summary = "A Decide Op to mark the decision tree of the Op.";
     let description = [{
@@ -78,19 +76,43 @@ def decideOp : approxMLIR_Op<"decide", [Pure]> {
 
         * thresholds and decisions will be exported to be tuned by out-of-tree autotuner.
 
-        Example:
+        Example (with pretty print):
 
         ```mlir
-        %0 = arith.constant 2 : i32
-        // Apply the decide operation to %0
-        %1 = approxMLIR.decide %0 : i32
+        // %state has type f32
+        approxMLIR.decide (%state) {
+            decision_values = array<i32: 0, 1>,
+            decisions = array<i32: 0, 1>,
+            num_thresholds = 1,
+            thresholds = array<i32: 2>,
+            thresholds_lowers = array<i32: 0>,
+            thresholds_uppers = array<i32: 4>
+         } : f32
+        ```
+        Example (generic form, without pretty print):
+
+        ```mlir
+         "approxMLIR.decide"(%state) <{
+              decision_values = array<i32: 0, 1>,
+              decisions = array<i32: 0, 1>,
+              num_thresholds = 1 : i32,
+              thresholds = array<i32: 2>,
+              thresholds_lowers = array<i32: 0>,
+              thresholds_uppers = array<i32: 4>
+          }> : (f32) -> ()
         ```
     }];
 
-    let arguments = (ins AnyType: $state, AnyType: $num_thresholds,  AnyType: $thresholds_uppers, AnyType: $thresholds_lowers, AnyType: $decision_values, AnyType: $thresholds, AnyType: $decisions);
+    let arguments = (ins AnyType: $state,
+                         I32Attr: $num_thresholds,
+                         DenseI32ArrayAttr: $thresholds_uppers,
+                         DenseI32ArrayAttr: $thresholds_lowers,
+                         DenseI32ArrayAttr: $decision_values,
+                         DenseI32ArrayAttr: $thresholds,
+                         DenseI32ArrayAttr: $decisions);
 
-//    let assemblyFormat = "$state `,` $num_thresholds `,` $thresholds_uppers `,` $thresholds_lowers `,` $decision_values `,` $thresholds `,` $decisions attr-dict `:` type($state) `,` type($num_thresholds) `,` type($thresholds_uppers) `,` type($thresholds_lowers) `,` type($decision_values) `,` type($thresholds) `,` type($decisions) ";
-
+    // Corrected assemblyFormat: Removed quotes around parentheses. Used backticks for colon.
+    let assemblyFormat = "`(` $state `)` attr-dict `:` type($state)";
 }
 
 def transformOp : approxMLIR_Op<"transform"> {
