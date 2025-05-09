@@ -1,3 +1,4 @@
+#include "PassDetails.h"
 
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -10,14 +11,14 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 
 #include "approxMLIR/Passes/Passes.h"
-// #include "approxMLIR/Passes/Utils.h"
+#include "approxMLIR/Passes/Utils.h"
 #include "llvm/ADT/STLExtras.h"
 #include <memory>
 // set
 #include <set>
-#include "PassDetails.h"
 
 namespace mlir {
     using namespace approxMLIR;
@@ -140,23 +141,18 @@ namespace mlir {
 
             // decision tree arguments
             Value state;
-            Value num_thresholds;
-            Value thresholds_uppers;
-            Value thresholds_lowers;
-            Value decision_values;
-            Value thresholds;
-            Value decisions;
+            int num_thresholds;
+            std::vector<int> thresholds_uppers = {4};
+            std::vector<int> thresholds_lowers = {0};
+            std::vector<int> decision_values = {0, 1};
+            std::vector<int> thresholds = {2};
+            std::vector<int> decisions = {0, 1};
 
             bool in_knob = false;
             Region* region = nullptr;
             
-            callOp.dump();
-            llvm::outs() << "-----------------\n";
             
             StringRef callee = callOp.getCallee();
-            
-            
-            // llvm::outs() << callee << "\n";
             
             // We only look at the start and get the parent region.
             if(callee.compare(StringRef("knob_start")) != 0) {
@@ -169,7 +165,6 @@ namespace mlir {
             
             region = callOp->getParentRegion();
             
-            // dump_region(region);
 
             /**
              * Step 1: Lower decision tree
@@ -178,21 +173,10 @@ namespace mlir {
             for (Block &block : region->getBlocks()) {
                 for (Operation &op : block.getOperations()) {
                     if(dyn_cast<func::CallOp>(op) && dyn_cast<func::CallOp>(op).getCallee().compare(StringRef("decision_tree")) == 0) {
-                        // parse func.call @decision_tree(%i_f32, %num_thresholds, %thresholds_uppers, %thresholds_lowers, %decision_values, %thresholds, %decisions) : (f32, i32, tensor<3xf32>, tensor<3xf32>, tensor<3xi32>, tensor<3xf32>, tensor<3xi32>) -> () 
-                        // then create a decideOp, inserting it into the tempBlock
-                        // op.dump();
                         auto callOp = dyn_cast<func::CallOp>(op);
                         // parse the inputs
                         state = callOp.getOperand(0);
-                        num_thresholds = callOp.getOperand(1);
-                        thresholds_uppers = callOp.getOperand(2);
-                        thresholds_lowers = callOp.getOperand(3);
-                        decision_values = callOp.getOperand(4);
-                        thresholds = callOp.getOperand(5);
-                        decisions = callOp.getOperand(6);
                         
-                        // create the decideOp
-                        // then, we insert the decideOp based on the annotation func.call @decision_tree(%i_f32, %num_thresholds, %thresholds_uppers, %thresholds_lowers, %decision_values, %thresholds, %decisions) : (f32, i32, tensor<3xf32>, tensor<3xf32>, tensor<3xi32>, tensor<3xf32>, tensor<3xi32>) -> ()
                         rewriter.setInsertionPoint(&op);
                         rewriter.replaceOpWithNewOp<approxMLIR::decideOp>(callOp, std::nullopt,
                             state, num_thresholds, thresholds_uppers, thresholds_lowers, decision_values, thresholds, decisions);
@@ -201,9 +185,6 @@ namespace mlir {
                     }
                 }
             }
-            // llvm::outs() << "done lowering decision tree\n";
-            // dump_region(region);
-
             // todo: insert the checkerOp
 
         
@@ -236,16 +217,7 @@ namespace mlir {
             if(start_knob == nullptr || end_knob == nullptr) {
                 return failure();
             }
-
-            // start_knob->dump();
-            // end_knob->dump();
-
-            llvm::outs() << "found knob_start and knob_end\n";
-
-            
             // step 3: move Ops to the new block
-            
-
             // First emit Ops to the new block, then move the new block to the body of the approxForOp
             Block* tempBlock = rewriter.createBlock(region, {}, std::nullopt, std::nullopt); // side-effect: change insert point to the end of the created block
 
@@ -254,7 +226,6 @@ namespace mlir {
             std::vector<Operation*> opsInRegion;
             
             for (auto* op : opsToMove) {
-                // op->dump();
                 // here we use rewriter to move the Ops between the 2 annotations in the new block
                 auto* newOp = moveMarkedOpsToNewBlock(op, rewriter);
                 opsInRegion.push_back(newOp);
@@ -266,46 +237,26 @@ namespace mlir {
             }
 
             for (auto* op : opsInRegion) {
-                op->dump();
-                // then we keep track of all the uses for the internal Ops
-                // also we keep track of all the defs for the internal Ops
-                // such uses and defs will be used to create the KnobOp
                 track_users(*op, users, results);
                 track_producers(*op, producers, producerVals);
             }
             
             generate_approx_outs(opsInRegion, users, results, resultTypes);
 
-            // rewriter.create<approxMLIR::transformOp>(callOp.getLoc(), StringRef("NNsubstitute"), 1);
-            
-
             rewriter.replaceOpWithNewOp<approxMLIR::yieldOp>(end_knob, results);  
 
-            // dump_region(region);
-            
             
             // step 4: emit approxOp (producers, state, rf, QoS_in, QoS_out -> users) by replacing the start_knob
-
-            // todo: block arguments will be set when configuring the approxOp
-            // for(auto arg: producers) {
-            //     tempBlock->addArgument(arg.first, arg.second);
-            // }
             
-            // tempBlock->dump(); 
-            llvm::outs() << "------------------\n";
             rewriter.setInsertionPoint(start_knob);
-
             auto approxOp = rewriter.replaceOpWithNewOp<approxMLIR::approxForOp>(start_knob, TypeRange(ArrayRef<Type>(resultTypes)), state, state, state, state, producerVals); // temporarily set rf, QoS_in, and QoS_out to 0 (todo)
             
 
             // step 5: move the tempBlock to the approxOp
             Region & approxRegion = approxOp.getBody();
             Block* approxBlock = rewriter.createBlock(&approxRegion, approxRegion.end(), std::nullopt, std::nullopt);
-            // approxBlock->dump();
-            // llvm::outs() << "-------!!--\n";
             rewriter.mergeBlocks(tempBlock, approxBlock, std::nullopt);
             
-            // approxOp.dump();
             
             // step 6: finish
             rewriter.restoreInsertionPoint(savedInsertPoint);
@@ -335,14 +286,9 @@ namespace mlir {
             if(failed(applyPartialConversion(getOperation(), target, std::move(patterns)))) {
                 return signalPassFailure();
             }
-
-            // getOperation()->dump();
-
-            // llvm::outs() << "EmitApproxPass: \n";
         }
     };
 }
-
 }
 
 
