@@ -11,6 +11,7 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 
 #include "approxMLIR/Passes/Passes.h"
 #include "approxMLIR/Passes/Utils.h"
@@ -219,8 +220,6 @@ namespace mlir {
                 return failure();
             }
             // step 3: move Ops to the new block
-            
-
             // First emit Ops to the new block, then move the new block to the body of the approxForOp
             Block* tempBlock = rewriter.createBlock(region, {}, std::nullopt, std::nullopt); // side-effect: change insert point to the end of the created block
 
@@ -229,7 +228,6 @@ namespace mlir {
             std::vector<Operation*> opsInRegion;
             
             for (auto* op : opsToMove) {
-                // op->dump();
                 // here we use rewriter to move the Ops between the 2 annotations in the new block
                 auto* newOp = moveMarkedOpsToNewBlock(op, rewriter);
                 opsInRegion.push_back(newOp);
@@ -241,46 +239,26 @@ namespace mlir {
             }
 
             for (auto* op : opsInRegion) {
-                op->dump();
-                // then we keep track of all the uses for the internal Ops
-                // also we keep track of all the defs for the internal Ops
-                // such uses and defs will be used to create the KnobOp
                 track_users(*op, users, results);
                 track_producers(*op, producers, producerVals);
             }
             
             generate_approx_outs(opsInRegion, users, results, resultTypes);
 
-            // rewriter.create<approxMLIR::transformOp>(callOp.getLoc(), StringRef("NNsubstitute"), 1);
-            
-
             rewriter.replaceOpWithNewOp<approxMLIR::yieldOp>(end_knob, results);  
 
-            // dump_region(region);
-            
             
             // step 4: emit approxOp (producers, state, rf, QoS_in, QoS_out -> users) by replacing the start_knob
-
-            // todo: block arguments will be set when configuring the approxOp
-            // for(auto arg: producers) {
-            //     tempBlock->addArgument(arg.first, arg.second);
-            // }
             
-            // tempBlock->dump(); 
-            llvm::outs() << "------------------\n";
             rewriter.setInsertionPoint(start_knob);
-
             auto approxOp = rewriter.replaceOpWithNewOp<approxMLIR::approxForOp>(start_knob, TypeRange(ArrayRef<Type>(resultTypes)), state, state, state, state, producerVals); // temporarily set rf, QoS_in, and QoS_out to 0 (todo)
             
 
             // step 5: move the tempBlock to the approxOp
             Region & approxRegion = approxOp.getBody();
             Block* approxBlock = rewriter.createBlock(&approxRegion, approxRegion.end(), std::nullopt, std::nullopt);
-            // approxBlock->dump();
-            // llvm::outs() << "-------!!--\n";
             rewriter.mergeBlocks(tempBlock, approxBlock, std::nullopt);
             
-            // approxOp.dump();
             
             // step 6: finish
             rewriter.restoreInsertionPoint(savedInsertPoint);
@@ -310,10 +288,6 @@ namespace mlir {
             if(failed(applyPartialConversion(getOperation(), target, std::move(patterns)))) {
                 return signalPassFailure();
             }
-
-            // getOperation()->dump();
-
-            // llvm::outs() << "EmitApproxPass: \n";
         }
     };
 }

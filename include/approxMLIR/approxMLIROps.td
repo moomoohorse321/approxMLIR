@@ -12,6 +12,10 @@
 include "Dialect.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
+include "mlir/Interfaces/ViewLikeInterface.td"
+include "mlir/Interfaces/ControlFlowInterfaces.td"
+include "mlir/Interfaces/LoopLikeInterface.td"
+include "mlir/IR/RegionKindInterface.td"
 include "mlir/IR/SymbolInterfaces.td"
 
 def fooOp : approxMLIR_Op<"foo", [Pure,
@@ -67,7 +71,7 @@ def checkerOp: approxMLIR_Op<"checker", [Pure]> {
 }
 
 
-def decideOp : approxMLIR_Op<"decide", [Pure]> {
+def decideOp : approxMLIR_Op<"decide"> {
     let summary = "A Decide Op to mark the decision tree of the Op.";
     let description = [{
         The `approxMLIR.decide` operation illustrates how to define an
@@ -134,7 +138,6 @@ def transformOp : approxMLIR_Op<"transform"> {
 
 
 
-
 def yieldOp : approxMLIR_Op<"yield", [Pure, Terminator]> {
     let summary = "A Yield Op to mark the end of the Op.";
     let description = [{
@@ -152,14 +155,13 @@ def yieldOp : approxMLIR_Op<"yield", [Pure, Terminator]> {
         %1 = approxMLIR.yield %0 : i32
         ```
     }];
+    let arguments = (ins Variadic<AnyType>:$results); // Use $inputs as per your naming
 
-    let arguments = (ins Variadic<AnyType>:$inputs);
-    
-    let assemblyFormat = "$inputs attr-dict `:` type($inputs)";
+    let assemblyFormat = [{  attr-dict ($results^ `:` type($results))? }];
 }
 
 
-def approxMLIR_KnobOp : approxMLIR_Op<"template_knob", [Pure]>  {
+def approxMLIR_KnobOp : approxMLIR_Op<"knob">  {
     let summary = "An error knob Op acting as a wrapper to the transformed Op / Graph.";
     let description = [{
         The `approxMLIR.knob` operation illustrates how to define an error knob that characterizes the transformation of the internal Op / Graph. Error knob unqiuely determines how the internal Op will be lowered.
@@ -203,12 +205,14 @@ def approxMLIR_KnobOp : approxMLIR_Op<"template_knob", [Pure]>  {
         ```
     }];
 
-    let arguments = (ins AnyType:$inputs);
-    let results = (outs AnyType:$results);
+    let arguments = (ins AnyType:$state, AnyType:$rf, AnyType:$QoS_in, AnyType:$QoS_out, Variadic<AnyType>:$args, SymbolNameAttr: $trnasform_type ); //  state, rf, QoS_in, QoS_out, args
+    let results = (outs Variadic<AnyType>:$results);
     let regions = (region AnyRegion:$body);
+
+
 }
 
-def approxForOp : approxMLIR_Op<"for", [Pure]> {
+def approxForOp : approxMLIR_Op<"for"> {
     let summary = "A template for defining all ApproxMLIR Ops.";
     let description = [{
         The `approxMLIR.for` operation illustrates how to define a new
@@ -230,7 +234,11 @@ def approxForOp : approxMLIR_Op<"for", [Pure]> {
     let results = (outs Variadic<AnyType>:$results);
     let regions = (region AnyRegion:$body);
 
-    let assemblyFormat = "$state `,` $rf `,` $QoS_in `,` $QoS_out `,` $args attr-dict `:` type($state) `,` type($rf) `,` type($QoS_in) `,` type($QoS_out) `,` type($args) `->` type($results) $body";
+    // let assemblyFormat = "$state `,` $rf `,` $QoS_in `,` $QoS_out `,` $args attr-dict `:` type($state) `,` type($rf) `,` type($QoS_in) `,` type($QoS_out) `,` type($args) `->` type($results) $body";
+
+    let assemblyFormat =
+        "$state `,` $rf `,` $QoS_in `,` $QoS_out `,` $args attr-dict `:` "
+        "functional-type(operands, results) $body";
 } 
 
 
