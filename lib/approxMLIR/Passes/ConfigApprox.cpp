@@ -144,6 +144,17 @@ namespace mlir {
             }
         };
 
+        struct FinalizeDecisionTree : public OpRewritePattern<approxMLIR::yieldOp> {
+            // the yield will be lowered to scf::yieldOp
+            using OpRewritePattern<approxMLIR::yieldOp>::OpRewritePattern;
+
+            LogicalResult matchAndRewrite(approxMLIR::yieldOp yieldOp, PatternRewriter &rewriter) const final {
+                rewriter.setInsertionPoint(yieldOp);
+                rewriter.replaceOpWithNewOp<scf::YieldOp>(yieldOp, yieldOp.getOperands());
+                return success();
+            }
+        };
+
         struct ConfigureDecisionTree : public OpRewritePattern<approxMLIR::decideOp> {
             using OpRewritePattern<approxMLIR::decideOp>::OpRewritePattern;
 
@@ -276,7 +287,7 @@ namespace mlir {
             }
 
             // for each decision, we emit a branch, caller MUST set the insersion point before approxOp
-            static bool emitBranches(
+            static Operation* emitBranches(
                 Decision2Condition &c,
                 approxMLIR::KnobOp approxOp,
                 PatternRewriter &rewriter,
@@ -285,12 +296,11 @@ namespace mlir {
                 auto loc = approxOp->getLoc();
                 // insert the region into the if, and move the insersion point to then.
                 // the region is cloned from approxOp into the ifOp.
-                
                 auto ifOp = rewriter.create<scf::IfOp>(loc, c.condition_op->getResult(0), !isEnd);
                 Region& approxBody = approxOp.getBody();
+                rewriter.cloneRegionBefore(approxBody, ifOp.getThenRegion(), ifOp.getThenRegion().end());
                 
-                return true;
-            
+                return ifOp;
             }
 
             /**
@@ -303,7 +313,7 @@ namespace mlir {
                 llvm::ArrayRef<int> thresholds_l = decideOp.getThresholdsLowers();
                 llvm::ArrayRef<int> thresholds_u = decideOp.getThresholdsUppers();
                 std::map<int, Decision2Condition> decision2Condition;
-                llvm::outs() << "--------------------------\n";
+                llvm::dbgs() << "--------------------------\n";
                 assert(thresholds_l.size() == 1 && thresholds_u.size() == 1 && "Currently only support 1 dim feature");
 
                 buildDecision2Condition(decision2Condition, thresholds, decisions, thresholds_l, thresholds_u, 0);
@@ -319,9 +329,41 @@ namespace mlir {
                     auto &condition = pair.second;
                     emitConditions(decideOp.getState(), condition, approxOp, rewriter);
                 }
-                llvm::outs() << "========= conditions emitted ===========\n";
+                llvm::dbgs() << "========= conditions emitted ===========\n";
 
                 rewriter.eraseOp(decideOp);
+
+                // finally remove the
+                rewriter.setInsertionPoint(approxOp);
+
+                // first analyze how many branches we have
+                int numBranches = 0, branches_taken = 0;
+
+                for(auto &pair: decision2Condition) {
+                    auto &condition = pair.second;
+                    if(condition.condition_op) {
+                        numBranches++;
+                    }
+                }
+
+                llvm::dbgs() << "Num branches to emit: " << numBranches << "\n";
+
+                for(auto &pair: decision2Condition) {
+                    auto &condition = pair.second;
+                    if(condition.condition_op) {
+                        // emit the branches
+                        branches_taken++;
+                        auto emittedOp = emitBranches(condition, dyn_cast<approxMLIR::KnobOp>(approxOp), rewriter, numBranches == branches_taken);
+
+                        // finally, we prepare for the next call.
+                        auto ifOp = dyn_cast<scf::IfOp>(emittedOp);
+                        if(ifOp && numBranches != branches_taken) {
+                            rewriter.setInsertionPointToStart(&ifOp.getElseRegion().front());
+                        }
+                    }
+                }
+
+                llvm::dbgs() << "Num branches emitted: " << branches_taken << "\n";
 
                 return success(); 
             }
@@ -336,6 +378,7 @@ namespace mlir {
                 RewritePatternSet patterns(&getContext());
                 patterns.add<ConifgureNN4Func>(&getContext());
                 patterns.add<ConfigureDecisionTree>(&getContext());
+                patterns.add<FinalizeDecisionTree>(&getContext());
                 GreedyRewriteConfig config;
                 config.maxIterations = 1; // to debug
                 (void)(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns)), 

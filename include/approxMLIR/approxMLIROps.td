@@ -205,44 +205,12 @@ def approxMLIR_KnobOp : approxMLIR_Op<"knob">  {
         ```
     }];
 
-    let arguments = (ins AnyType:$state, AnyType:$rf, AnyType:$QoS_in, AnyType:$QoS_out, Variadic<AnyType>:$args, SymbolNameAttr: $trnasform_type ); //  state, rf, QoS_in, QoS_out, args
+    let arguments = (ins AnyType:$state, I32Attr:$id, I32Attr:$rf, DenseI32ArrayAttr:$QoS_in, DenseI32ArrayAttr:$QoS_out, Variadic<AnyType>:$args, SymbolNameAttr: $trnasform_type); //  state, rf, QoS_in, QoS_out, args
     let results = (outs Variadic<AnyType>:$results);
     let regions = (region AnyRegion:$body);
-
 
 }
 
-def approxForOp : approxMLIR_Op<"for"> {
-    let summary = "A template for defining all ApproxMLIR Ops.";
-    let description = [{
-        The `approxMLIR.for` operation illustrates how to define a new
-        operation in a dialect. It uses an operation trait to declare that it
-        has no side effects.
-
-        This operation takes an integer argument and returns an integer.
-
-        Example:
-
-        ```mlir
-        %0 = arith.constant 2 : i32
-        // Apply the for operation to %0
-        %1 = approxMLIR.for %0 : i32
-        ```
-    }];
-
-    let arguments = (ins AnyType:$state, AnyType:$rf, AnyType:$QoS_in, AnyType:$QoS_out, Variadic<AnyType>:$args); //  state, rf, QoS_in, QoS_out, args
-    let results = (outs Variadic<AnyType>:$results);
-    let regions = (region AnyRegion:$body);
-
-    // let assemblyFormat = "$state `,` $rf `,` $QoS_in `,` $QoS_out `,` $args attr-dict `:` type($state) `,` type($rf) `,` type($QoS_in) `,` type($QoS_out) `,` type($args) `->` type($results) $body";
-
-    let assemblyFormat =
-        "$state `,` $rf `,` $QoS_in `,` $QoS_out `,` $args attr-dict `:` "
-        "functional-type(operands, results) $body";
-} 
-
-
-// The following region is left for contributors to scale up the approxOps supported in the dialect.
 
 
 #endif // APPROXMLIR_OPS

@@ -70,9 +70,9 @@ namespace mlir {
     
     static void generate_approx_outs(std::vector<Operation*> inRegionOps, std::vector<Operation*> &users, std::vector<Value> &results, std::vector<Type> &resultTypes) {
         std::vector<Value> _results;
-        // llvm::outs() << "generate_approx_outs\n";
+        // llvm::dbgs() << "generate_approx_outs\n";
         for(auto result : results) {
-            // llvm::outs() << "result: ";
+            // llvm::dbgs() << "result: ";
             // result.dump();
             bool usedOutsideRegion = false;
             if(result.use_empty()) {
@@ -94,7 +94,7 @@ namespace mlir {
             }
         }
 
-        // llvm::outs() << _results.size() << " results\n";
+        // llvm::dbgs() << _results.size() << " results\n";
         
         results.clear();
         for(auto result : _results) {
@@ -158,7 +158,7 @@ namespace mlir {
             
             // We only look at the start and get the parent region.
             if(callee.compare(StringRef("knob_start")) != 0) {
-                // llvm::outs() << "not knob_start\n";
+                // llvm::dbgs() << "not knob_start\n";
                 return failure();
             }
             
@@ -171,7 +171,7 @@ namespace mlir {
             /**
              * Step 1: Lower decision tree
              */
-            llvm::outs() << "lowering decision tree\n";
+            llvm::dbgs() << "lowering decision tree\n";
             for (Block &block : region->getBlocks()) {
                 for (Operation &op : block.getOperations()) {
                     if(dyn_cast<func::CallOp>(op) && dyn_cast<func::CallOp>(op).getCallee().compare(StringRef("decision_tree")) == 0) {
@@ -223,7 +223,7 @@ namespace mlir {
             // First emit Ops to the new block, then move the new block to the body of the approxForOp
             Block* tempBlock = rewriter.createBlock(region, {}, std::nullopt, std::nullopt); // side-effect: change insert point to the end of the created block
 
-            // llvm::outs() << "moving ops to new block\n";
+            // llvm::dbgs() << "moving ops to new block\n";
             
             std::vector<Operation*> opsInRegion;
             
@@ -251,7 +251,7 @@ namespace mlir {
             // step 4: emit approxOp (producers, state, rf, QoS_in, QoS_out -> users) by replacing the start_knob
             
             rewriter.setInsertionPoint(start_knob);
-            auto approxOp = rewriter.replaceOpWithNewOp<approxMLIR::approxForOp>(start_knob, TypeRange(ArrayRef<Type>(resultTypes)), state, state, state, state, producerVals); // temporarily set rf, QoS_in, and QoS_out to 0 (todo)
+            auto approxOp = rewriter.replaceOpWithNewOp<approxMLIR::KnobOp>(start_knob, TypeRange(ArrayRef<Type>(resultTypes)), state, 0, 0, std::vector<int>{}, std::vector<int>{}, producerVals, "loop_perforate"); // temporarily set rf, QoS_in, and QoS_out to 0 (todo)
             
 
             // step 5: move the tempBlock to the approxOp
