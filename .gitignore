@@ -8,3 +8,7 @@ cmake-build-debug/
 cmake-build-release/
 
 compile_commands.json
+test/python/__pycache__/
+test/python/mnist_exact_model/
+test/python/*.mlir
+test/python/*.mlirbc
