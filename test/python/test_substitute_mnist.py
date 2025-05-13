@@ -42,7 +42,7 @@ def create_mnist_model():
         tf.keras.layers.Conv2D(64, (3, 3), activation='relu'),
         tf.keras.layers.MaxPooling2D((2, 2)),
         tf.keras.layers.Flatten(),
-        tf.keras.layers.Dense(128, activation='relu'),
+        tf.keras.layers.Dense(512, activation='relu'),
         tf.keras.layers.Dense(NUM_CLASSES, activation='softmax')
     ])
     return model
@@ -194,7 +194,8 @@ def test_comparison(self, test_images, test_labels, num_samples=10, use_mlir_app
         exact_pred = np.argmax(exact_result.numpy())
         
         # Get approximate prediction
-        approx_result = self.approx_kernel.approx_predict(test_image)
+        if use_mlir_approx:
+            approx_result = self.approx_kernel.approx_predict(test_image).to_host()
         approx_pred = np.argmax(approx_result)
         
         # Update counters
@@ -256,7 +257,7 @@ def test():
     
     # Test on sample images
     print("\nComparing exact and approximate models on test samples...")
-    func_sub.test_comparison(x_test, y_test, num_samples=10)
+    func_sub.test_comparison(x_test, y_test, num_samples=10, use_mlir_approx=False)
     
     print(f"\nApproximate function substitution test complete.")
     print(f"MLIR bytecode saved to: {mlir_path}")
@@ -293,4 +294,4 @@ def test_load():
     
 
 if __name__ == "__main__":
-    test_load()
+    test()
