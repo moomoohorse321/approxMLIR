@@ -18,9 +18,9 @@ source venv/bin/activate
 ```
 Refer to this [iree versions](https://iree.dev/developers/general/release-management/) to choose the right version to download.
 ```bash
-pip install iree-base-compiler==2.9.0
-pip install iree-base-runtime==2.9.0
-pip install iree-tools-tf==20241108.1073
+pip install iree-base-compiler==3.3.0
+pip install iree-base-runtime==3.3.0
+pip install iree-tools-tf==20250320.1206
 ```
 
 ## Run the test
