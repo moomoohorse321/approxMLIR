@@ -80,29 +80,59 @@ namespace mlir {
             static func::FuncOp findReplacingFunc(Operation* op, Region* parentRegion) {
                 func::FuncOp approxFunc = nullptr;
                 // if the Op is funcOp and there is an Op called approx_<name> in the module, we can replace it.
-                if (isa<func::FuncOp>(op)) {
-                    auto funcOp = dyn_cast<func::FuncOp>(op);
+                auto funcOp = dyn_cast<func::FuncOp>(op);
+                if (funcOp) {
                     auto approxFuncName = "approx_" + funcOp.getName().str();
-                    if (funcOp.getName() == approxFuncName) {
-                        
-                        for(Block &block : parentRegion->getBlocks()) {
-                            for(Operation &op : block.getOperations()) {
-                                auto funcOp = dyn_cast<func::FuncOp>(op);
-                                if (!funcOp) {
-                                    continue;
-                                }
-                                if (funcOp.getName() == approxFuncName) {
-                                    approxFunc = funcOp;
-                                    break;
-                                }
+                    // llvm::dbgs() << "Approx func name: " << approxFuncName << "\n";
+                    for(Block &block : parentRegion->getBlocks()) {
+                        for(Operation &op : block.getOperations()) {
+                            auto approxOp = dyn_cast<func::FuncOp>(op);
+                            if (!approxOp) {
+                                continue;
                             }
-                        }
-                        if (!approxFunc) {
-                            return nullptr; // No approximate function found, nothing to do.
+                            // approxOp.dump();
+                            if (approxOp.getName() == approxFuncName) {
+                                approxFunc = approxOp;
+                                break;
+                            }
                         }
                     }
                 }
                 return approxFunc;
+            }
+
+            static void dump_region(Region* region) {
+                for (Block &block : region->getBlocks()) {
+                    block.dump();
+                }
+            }
+
+            static bool handleNNSubstitute(approxMLIR::transformOp transformOp, PatternRewriter &rewriter) {
+                // auto inserted = rewriter.create<approxMLIR::transformOp>(funcOp.getLoc(), StringRef("NNsubstitute"), 1);
+                StringRef transformType = transformOp.getTransformType();
+                if(0 != transformType.compare(StringRef("NNsubstitute"))) {
+                    return false;
+                }
+                func::FuncOp approxFunc = nullptr;
+                func::FuncOp parentFuncOp = dyn_cast<func::FuncOp>(transformOp->getParentOp());
+                if (!parentFuncOp) {
+                    // we currently only support function level substitution.
+                    return false; // No approximate function found, nothing to do.
+                }
+                Region* moduleRegion = parentFuncOp->getParentRegion();
+                
+                if(!(approxFunc = findReplacingFunc(parentFuncOp, moduleRegion))) {
+                    // rewriter.eraseOp(transformOp);
+                    llvm::dbgs() << "No approx func found.\n";
+                    return false; // No approximate function found, nothing to do.
+                }
+
+                Region &replacedRegion = parentFuncOp.getBody();
+                eraseRegion(&replacedRegion, rewriter);
+
+                rewriter.cloneRegionBefore(approxFunc.getBody(), replacedRegion, parentFuncOp.getBody().end());
+
+                return true;
             }
 
 
@@ -121,25 +151,20 @@ namespace mlir {
                 if(0 != transformType.compare(StringRef("NNsubstitute"))) {
                     return failure();
                 }
-                func::FuncOp approxFunc = nullptr;
-                func::FuncOp parentFuncOp = dyn_cast<func::FuncOp>(transformOp->getParentOp());
-                if (!parentFuncOp) {
-                    // we currently only support function level substitution.
-                    return failure(); // No approximate function found, nothing to do.
+                if(handleNNSubstitute(transformOp, rewriter)) {
+                    return success();
                 }
-                Region* parentRegion = transformOp->getParentRegion();
-                
-                if(!(approxFunc = findReplacingFunc(parentFuncOp, parentRegion))) {
-                    // rewriter.eraseOp(transformOp);
-                    llvm::errs() << "Error: transformOp is not a function.\n";
-                    return failure(); // No approximate function found, nothing to do.
-                }
+                return failure();
+            }
+        };
 
-                Region &replacedRegion = parentFuncOp.getBody();
-                eraseRegion(&replacedRegion, rewriter);
+        struct FinalizeDecisionTree : public OpRewritePattern<approxMLIR::yieldOp> {
+            // the yield will be lowered to scf::yieldOp
+            using OpRewritePattern<approxMLIR::yieldOp>::OpRewritePattern;
 
-                rewriter.cloneRegionBefore(approxFunc.getBody(), replacedRegion, parentFuncOp.getBody().end());
-
+            LogicalResult matchAndRewrite(approxMLIR::yieldOp yieldOp, PatternRewriter &rewriter) const final {
+                rewriter.setInsertionPoint(yieldOp);
+                rewriter.replaceOpWithNewOp<scf::YieldOp>(yieldOp, yieldOp.getOperands());
                 return success();
             }
         };
@@ -276,7 +301,7 @@ namespace mlir {
             }
 
             // for each decision, we emit a branch, caller MUST set the insersion point before approxOp
-            static bool emitBranches(
+            static Operation* emitBranches(
                 Decision2Condition &c,
                 approxMLIR::KnobOp approxOp,
                 PatternRewriter &rewriter,
@@ -285,12 +310,11 @@ namespace mlir {
                 auto loc = approxOp->getLoc();
                 // insert the region into the if, and move the insersion point to then.
                 // the region is cloned from approxOp into the ifOp.
-                
                 auto ifOp = rewriter.create<scf::IfOp>(loc, c.condition_op->getResult(0), !isEnd);
                 Region& approxBody = approxOp.getBody();
+                rewriter.cloneRegionBefore(approxBody, ifOp.getThenRegion(), ifOp.getThenRegion().end());
                 
-                return true;
-            
+                return ifOp;
             }
 
             /**
@@ -303,7 +327,7 @@ namespace mlir {
                 llvm::ArrayRef<int> thresholds_l = decideOp.getThresholdsLowers();
                 llvm::ArrayRef<int> thresholds_u = decideOp.getThresholdsUppers();
                 std::map<int, Decision2Condition> decision2Condition;
-                llvm::outs() << "--------------------------\n";
+                llvm::dbgs() << "--------------------------\n";
                 assert(thresholds_l.size() == 1 && thresholds_u.size() == 1 && "Currently only support 1 dim feature");
 
                 buildDecision2Condition(decision2Condition, thresholds, decisions, thresholds_l, thresholds_u, 0);
@@ -319,9 +343,41 @@ namespace mlir {
                     auto &condition = pair.second;
                     emitConditions(decideOp.getState(), condition, approxOp, rewriter);
                 }
-                llvm::outs() << "========= conditions emitted ===========\n";
+                llvm::dbgs() << "========= conditions emitted ===========\n";
 
                 rewriter.eraseOp(decideOp);
+
+                // finally remove the
+                rewriter.setInsertionPoint(approxOp);
+
+                // first analyze how many branches we have
+                int numBranches = 0, branches_taken = 0;
+
+                for(auto &pair: decision2Condition) {
+                    auto &condition = pair.second;
+                    if(condition.condition_op) {
+                        numBranches++;
+                    }
+                }
+
+                llvm::dbgs() << "Num branches to emit: " << numBranches << "\n";
+
+                for(auto &pair: decision2Condition) {
+                    auto &condition = pair.second;
+                    if(condition.condition_op) {
+                        // emit the branches
+                        branches_taken++;
+                        auto emittedOp = emitBranches(condition, dyn_cast<approxMLIR::KnobOp>(approxOp), rewriter, numBranches == branches_taken);
+
+                        // finally, we prepare for the next call.
+                        auto ifOp = dyn_cast<scf::IfOp>(emittedOp);
+                        if(ifOp && numBranches != branches_taken) {
+                            rewriter.setInsertionPointToStart(&ifOp.getElseRegion().front());
+                        }
+                    }
+                }
+
+                llvm::dbgs() << "Num branches emitted: " << branches_taken << "\n";
 
                 return success(); 
             }
@@ -336,6 +392,7 @@ namespace mlir {
                 RewritePatternSet patterns(&getContext());
                 patterns.add<ConifgureNN4Func>(&getContext());
                 patterns.add<ConfigureDecisionTree>(&getContext());
+                patterns.add<FinalizeDecisionTree>(&getContext());
                 GreedyRewriteConfig config;
                 config.maxIterations = 1; // to debug
                 (void)(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns)), 
