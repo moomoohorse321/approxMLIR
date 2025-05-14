@@ -12,3 +12,5 @@ test/python/__pycache__/
 test/python/mnist_exact_model/
 test/python/*.mlir
 test/python/*.mlirbc
+test/python/*.png
+test/python/*/
