@@ -12,24 +12,56 @@ from iree.compiler import compile_str
 ################################
 
 # Create our approximate kernel for function substitution
-def get_approx_kernel(input_shape, output_shape, batch_size=32):
+# Create our approximate kernel for function substitution
+def get_approx_kernel(input_shape, output_shape, batch_size=32, approx_kernel_func = None, return_type = "NN4Func", nn_params = 128):
     """
-    Function to create and return an approximate kernel module.
-    Following the implementation style from the provided code.
+        Function to create and return an approximate kernel module.
+        User can provide a custom kernel function or use a default NN.
     """
     class ApproxKernel(tf.Module):
         def __init__(self):
             super().__init__()
             
-            # Create a simple DNN model to approximate ResNet50
-            inputs = tf.keras.layers.Input(input_shape)
-            x = tf.keras.layers.Flatten()(inputs)
-            x = tf.keras.layers.Dense(128)(x)
-            x = tf.keras.layers.Activation("relu")(x)
-            x = tf.keras.layers.Dense(10)(x)  # Same as ImageNet classes
-            outputs = tf.keras.layers.Softmax()(x)
+            self.inputs = tf.keras.layers.Input(input_shape)
             
-            self.model = tf.keras.Model(inputs, outputs)
+            
+            if approx_kernel_func is not None:
+                self.outputs = approx_kernel_func(self.inputs)
+                
+            self.kernel = approx_kernel_func
+            
+        @tf.function(input_signature=[
+            tf.TensorSpec(input_shape, tf.float32) 
+        ])
+        def approx_predict(self, inputs):
+            result = self.kernel(inputs)
+            return result
+    
+    class ApproxNN(ApproxKernel):
+        def __init__(self):
+            super().__init__()
+            if approx_kernel_func is None:
+                x = tf.keras.layers.Flatten()(self.inputs)
+                x = tf.keras.layers.Dense(nn_params)(x)
+                x = tf.keras.layers.Activation("relu")(x)
+                if len(output_shape) == 0:
+                    x = tf.keras.layers.Dense(1)(x)
+                    self.outputs = tf.keras.layers.Activation("sigmoid")(x)
+                elif len(output_shape) == 1:
+                    x = tf.keras.layers.Dense(output_shape[0])(x) 
+                    self.outputs = tf.keras.layers.Softmax()(x)
+                else:
+                    x = tf.keras.layers.Dense(output_shape[0])(x)
+                    x = tf.keras.layers.Activation("relu")(x)
+                    for i in range(1, len(output_shape)):
+                        x = tf.keras.layers.Dense(output_shape[i])(x)
+                        if i < len(output_shape) - 1:
+                            x = tf.keras.layers.Activation("relu")(x)
+                        else:
+                            x = tf.keras.layers.Activation("sigmoid")(x)
+                    self.outputs = x
+        
+            self.model = tf.keras.Model(self.inputs, self.outputs)
             
             # Define loss function and optimizer for training
             self.loss = tf.keras.losses.KLDivergence()
@@ -57,8 +89,11 @@ def get_approx_kernel(input_shape, output_shape, batch_size=32):
             gradients = tape.gradient(loss, self.model.trainable_variables)
             self.optimizer.apply_gradients(zip(gradients, self.model.trainable_variables))
             return loss
-            
-    return ApproxKernel()
+        
+    if return_type == "NN4Func":
+        return ApproxNN()
+    else:
+        return ApproxKernel()
 
 class SubstituteImpl:
     def __init__(self, approx_kernel, exact_module, func_name, input_shape, batch_size=32):
@@ -193,10 +228,14 @@ class FuncSubstitute:
             Trained approximate kernel
         """
         if use_provided and user_data is None:
-            raise ValueError("user_data must be provided if use_provided is True")
+            print("=========== Using provided kernel ===========")
+            return self.approx_kernel
         if not use_provided and num_samples is None:
             raise ValueError("num_samples must be provided if use_provided is False")
-        
+        if use_provided:
+            print("=========== Using provided data ===========")
+        else:
+            print("=========== Generating data ===========")
         train_data, train_labels = self.impl.gen_data(
             use_provided=use_provided,
             user_data=user_data,
@@ -207,14 +246,13 @@ class FuncSubstitute:
         model = self.impl.train_model(train_data, train_labels, epochs)
         return model
     
-    def compile_approx(self, export_dir="."):
+    def compile_approx(self, export_dir=".", exported_names = ["approx_predict", "approx_learn"]):
         """
         Compile the approximate kernel to MLIR and save it.
         
         Args:
             export_dir: Directory to save the compiled model
         """
-        exported_names = ["approx_predict", "approx_learn"]
         backend_choice = "iree_llvmcpu"
         
         print("Compiling approximate kernel...")
@@ -234,14 +272,13 @@ class FuncSubstitute:
         
         return mlir_path
 
-    def compile_exact(self, export_dir="."):
+    def compile_exact(self, export_dir=".", exported_names = ["predict", "learn"]):
         """
         Compile the exact module to MLIR and save it.
         
         Args:
             export_dir: Directory to save the compiled model
         """
-        exported_names = ["predict", "learn"]
         backend_choice = "iree_llvmcpu"
         
         print("Compiling exact module...")
