@@ -7,6 +7,7 @@ from iree.tf.support import module_utils
 from iree import runtime as ireert
 from iree.compiler import compile_str
 from substitute import FuncSubstitute, get_approx_kernel
+import os
 
 # Configuration for our MNIST model
 NUM_CLASSES = 10
@@ -268,7 +269,9 @@ def test():
     
     return exact_module, func_sub
 
-def test_load(load_mlir_path = "output.mlir"):
+parent_dir_path = os.path.dirname(os.path.abspath(__file__))
+
+def test_load(load_mlir_path = os.path.join(parent_dir_path, "bin", "output.mlir")):
     (x_train, y_train, y_train_onehot), (x_test, y_test, y_test_onehot) = load_data()
     
     exact_module_path = "mnist_exact_model"
