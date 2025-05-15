@@ -132,6 +132,8 @@ namespace mlir {
 
                 rewriter.cloneRegionBefore(approxFunc.getBody(), replacedRegion, parentFuncOp.getBody().end());
 
+                llvm::dbgs() << "=========================\n";
+
                 return true;
             }
 

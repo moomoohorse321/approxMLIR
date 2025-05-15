@@ -7,6 +7,7 @@ from iree.tf.support import module_utils
 from iree import runtime as ireert
 from iree.compiler import compile_str
 from substitute import FuncSubstitute, get_approx_kernel
+from approxMLIR import ToolBox
 import os
 
 # Configuration for our MNIST model
@@ -211,7 +212,7 @@ def test_comparison(self, test_images, test_labels, num_samples=10, use_mlir_app
     print(f"\nFull Test Set - Exact Model Accuracy: {exact_correct / len(test_images):.4f}")
     print(f"Full Test Set - Approximate Model Accuracy: {approx_correct / len(test_images):.4f}")
 
-def test():
+def init_mlir_files():
     # Load MNIST data
     exact_module_path = "mnist_exact_model"
     (x_train, y_train, y_train_onehot), (x_test, y_test, y_test_onehot) = load_data()
@@ -243,7 +244,7 @@ def test():
         batch_size=BATCH_SIZE
     )
     
-    func_sub.compile_exact()
+    mlir_path1 = func_sub.compile_exact()
     
     func_sub.test_comparison = test_comparison.__get__(func_sub)  # Bind the method to the instance
     
@@ -258,17 +259,25 @@ def test():
     print("Approximation training complete.")
     
     # Compile the approximate kernel to MLIR
-    mlir_path = func_sub.compile_approx()
+    mlir_path2 = func_sub.compile_approx()
     
-    # Test on sample images
-    print("\nComparing exact and approximate models on test samples...")
-    func_sub.test_comparison(x_test, y_test, num_samples=10, use_mlir_approx=False)
+    replace_exec_path = "../../external-tools/approx/replace"
+    merge_exec_path = "../../external-tools/approx/merge"
+    opt_exec_path = "../../build/bin/approxMLIR-opt"
+    mlir_path1 = "./approx.mlir"
+    mlir_path2 = "./exact.mlir"
+    output_path = "./merged.mlir"
+    # mlir path is *.mlirbc
+    os.system(f"iree-ir-tool copy {mlir_path1} -o {mlir_path1[:-2]}")
+    os.system(f"iree-ir-tool copy {mlir_path2} -o {mlir_path2[:-2]}")
+    toolbox = ToolBox(replace_exec_path, merge_exec_path, opt_exec_path)
+    toolbox.write2file_auxiliary_mlir_str("./auxiliary.mlir")
+    toolbox.link_mlir_modules("./auxiliary.mlir", mlir_path1, "./ext.mlir", keep_temp_files=True)
+    toolbox.link_mlir_modules("./ext.mlir", mlir_path2, output_path, keep_temp_files=True)
+    toolbox.optimize_mlir(output_path, "output.mlir")
     
-    print(f"\nApproximate function substitution test complete.")
-    print(f"MLIR bytecode saved to: {mlir_path}")
     
-    return exact_module, func_sub
-
+    
 parent_dir_path = os.path.dirname(os.path.abspath(__file__))
 
 def test_load(load_mlir_path = os.path.join(parent_dir_path, "bin", "output.mlir")):
@@ -301,4 +310,5 @@ def test_load(load_mlir_path = os.path.join(parent_dir_path, "bin", "output.mlir
     
 
 if __name__ == "__main__":
-    test()
+    init_mlir_files()
+    test_load()

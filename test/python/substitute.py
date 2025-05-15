@@ -306,7 +306,7 @@ class FuncSubstitute:
         with open(mlir_path, "r") as f:
             mlir_module = f.read()
 
-        flatbuffer_blob = compile_str(mlir_module, target_backends=["llvm-cpu"], input_type="stablehlo")
+        flatbuffer_blob = compile_str(mlir_module, target_backends=["llvm-cpu"])
 
         config = ireert.Config(backend.driver)
         ctx = ireert.SystemContext(config=config)
