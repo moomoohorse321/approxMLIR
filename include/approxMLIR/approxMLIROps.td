@@ -45,6 +45,7 @@ def fooOp : approxMLIR_Op<"foo", [Pure,
     }];
 }
 
+
 def checkerOp: approxMLIR_Op<"checker", [Pure]> {
     let summary = "A Checker Op to mark the safety checker of the Op.";
     let description = [{
@@ -213,20 +214,16 @@ def approxMLIR_KnobOp : approxMLIR_Op<"knob">  {
 
 // ------------------- Utility Ops ------------------- //
 
-def utilSummaryOp : approxMLIR_Op<"util.summary"> {
-    let summary = "A utility Op to print the summary of the Op.";
+def utilAnnoationFuncSubstitutionOp : approxMLIR_Op<"util.annoatation.func_substitution"> {
+    let summary = "A utility Op to print the annoation of the module.";
     let description = [{
-        * type can be "naive" / "standard"
-
         Example:
-
-
         ```mlir
-            "approxMLIR.util.summary"() <{type = "naive"}> : () -> ()
+            "approxMLIR.util.annoatation.func_substitution"() <{from = "predict", to = "approx_predict"}> : () -> ()
         ```
     }];
 
-    let arguments = (ins SymbolNameAttr: $type);
+    let arguments = (ins SymbolNameAttr: $from, SymbolNameAttr: $to);
 }
 
 

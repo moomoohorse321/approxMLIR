@@ -265,6 +265,37 @@ namespace mlir {
         }
     };
 
+    struct EmitAnnotation: public OpRewritePattern<approxMLIR::utilAnnoationFuncSubstitutionOp> {
+        using OpRewritePattern<approxMLIR::utilAnnoationFuncSubstitutionOp>::OpRewritePattern;
+
+        LogicalResult
+        matchAndRewrite(approxMLIR::utilAnnoationFuncSubstitutionOp annotationOp,
+            PatternRewriter &rewriter) const final {
+            StringRef from = annotationOp.getFrom();
+            StringRef to = annotationOp.getTo();
+            Region* parentRegion = annotationOp->getParentRegion();
+
+            // Iterate through the region to locate the <from> function
+            for (Block &block : parentRegion->getBlocks()) {
+                for (Operation &op : block.getOperations()) {
+                    if (auto funcOp = dyn_cast<func::FuncOp>(op)) {
+                        // llvm::dbgs() << "funcOp: " << funcOp.getSymName() << "\n";
+                        if (funcOp.getSymName().compare(from) == 0) {
+                            Region& funcBody = funcOp.getBody();
+                            rewriter.setInsertionPointToStart(&funcBody.front());
+                            rewriter.create<approxMLIR::transformOp>(funcOp.getLoc(), StringRef("NNsubstitute"), 1);
+                            // Create a new function with the same signature as the original
+                            break; // Stop after replacing the first occurrence
+                        }
+                    }
+                }
+            }
+
+            rewriter.eraseOp(annotationOp);
+            return success();
+        }
+    };
+
     struct EmitApproxPass
     : public impl::EmitApproxPassBase<EmitApproxPass> {
         using EmitApproxPassBase::EmitApproxPassBase;
@@ -272,6 +303,8 @@ namespace mlir {
         void runOnOperation() override {
             ConversionTarget target(getContext());
             
+            target.addIllegalOp<approxMLIR::utilAnnoationFuncSubstitutionOp>();
+
             target.addDynamicallyLegalOp<func::CallOp>([](func::CallOp op) {
                 // if it's a func::CallOp with Callee == "knob_start", we want to convert it
                 return op.getCallee().compare(StringRef("knob_start")) != 0; 
@@ -281,6 +314,7 @@ namespace mlir {
 
             RewritePatternSet patterns(&getContext());
             patterns.add<AnnocationOpConversion>(&getContext());
+            patterns.add<EmitAnnotation>(&getContext());
             // GreedyRewriteConfig config;
             // config.maxIterations = 1;
             if(failed(applyPartialConversion(getOperation(), target, std::move(patterns)))) {
