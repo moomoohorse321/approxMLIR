@@ -150,6 +150,8 @@ namespace mlir {
 
             LogicalResult matchAndRewrite(approxMLIR::yieldOp yieldOp, PatternRewriter &rewriter) const final {
                 rewriter.setInsertionPoint(yieldOp);
+                // llvm::dbgs() << "-------dumping yieldOp--------\n";
+                yieldOp->getParentOp()->dump();
                 rewriter.replaceOpWithNewOp<scf::YieldOp>(yieldOp, yieldOp.getOperands());
                 return success();
             }
@@ -168,20 +170,20 @@ namespace mlir {
                 std::map<int, Value> constValues; // emitted constant values
 
                 void print() {
-                    llvm::outs() << "Decision: " << decision << "\n";
-                    llvm::outs() << "Uppers: ";
+                    llvm::dbgs()<< "Decision: " << decision << "\n";
+                    llvm::dbgs()<< "Uppers: ";
                     for (auto upper : uppers) {
-                        llvm::outs() << upper << " ";
+                        llvm::dbgs()<< upper << " ";
                     }
-                    llvm::outs() << "\nLowers: ";
+                    llvm::dbgs()<< "\nLowers: ";
                     for (auto lower : lowers) {
-                        llvm::outs() << lower << " ";
+                        llvm::dbgs()<< lower << " ";
                     }
-                    llvm::outs() << "\nFeatures: ";
+                    llvm::dbgs()<< "\nFeatures: ";
                     for (auto feature : features) {
-                        llvm::outs() << feature << " ";
+                        llvm::dbgs()<< feature << " ";
                     }
-                    llvm::outs() << "\n";
+                    llvm::dbgs()<< "\n";
                 }
             };
             
@@ -281,7 +283,7 @@ namespace mlir {
                     c.condition_op = gteOp;
                 }
 
-                c.condition_op->getParentOp()->dump();
+                // c.condition_op->getParentOp()->dump();
 
                 return true;
             }
@@ -297,8 +299,13 @@ namespace mlir {
                 // insert the region into the if, and move the insersion point to then.
                 // the region is cloned from approxOp into the ifOp.
                 auto ifOp = rewriter.create<scf::IfOp>(loc, c.condition_op->getResult(0), !isEnd);
+                Block* originalBlock = &ifOp.getThenRegion().front();
+                rewriter.eraseOp(ifOp.thenYield());
+                rewriter.eraseBlock(originalBlock);
+                llvm::dbgs() << "========= emitting branches ===========\n";
                 Region& approxBody = approxOp.getBody();
                 rewriter.cloneRegionBefore(approxBody, ifOp.getThenRegion(), ifOp.getThenRegion().end());
+
                 
                 return ifOp;
             }
@@ -333,20 +340,25 @@ namespace mlir {
 
                 rewriter.eraseOp(decideOp);
 
-                // finally remove the
-                rewriter.setInsertionPoint(approxOp);
-
+                
                 // first analyze how many branches we have
                 int numBranches = 0, branches_taken = 0;
-
+                
                 for(auto &pair: decision2Condition) {
                     auto &condition = pair.second;
                     if(condition.condition_op) {
                         numBranches++;
                     }
                 }
-
+                
+                ModuleOp ModuleOp = approxOp->getParentOfType<mlir::ModuleOp>();
+                if(ModuleOp) {
+                    ModuleOp.dump();
+                }
+                
                 llvm::dbgs() << "Num branches to emit: " << numBranches << "\n";
+
+                rewriter.setInsertionPoint(approxOp);
 
                 for(auto &pair: decision2Condition) {
                     auto &condition = pair.second;
@@ -363,8 +375,14 @@ namespace mlir {
                     }
                 }
 
+                // remove the original approxOp
+                rewriter.eraseOp(approxOp);
+
+
                 llvm::dbgs() << "Num branches emitted: " << branches_taken << "\n";
 
+
+                ModuleOp.dump();
                 return success(); 
             }
         

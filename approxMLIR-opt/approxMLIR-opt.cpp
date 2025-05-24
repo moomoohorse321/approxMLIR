@@ -48,8 +48,8 @@ int main(int argc, char **argv) {
   mlir::stablehlo::registerAllDialects(registry);
   registry.insert<mlir::stablehlo::interpreter::InterpreterDialect>();
   registry.insert<mlir::approxMLIR::approxMLIRDialect>();
-  registry.insert<mlir::func::FuncDialect>();
-  registry.insert<mlir::arith::ArithDialect>();
+  // registry.insert<mlir::func::FuncDialect>();
+  // registry.insert<mlir::arith::ArithDialect>();
   // Add the following to include *all* MLIR Core dialects, or selectively
   // include what you need like above. You only need to register dialects that
   // will be *parsed* by the tool, not the one generated
