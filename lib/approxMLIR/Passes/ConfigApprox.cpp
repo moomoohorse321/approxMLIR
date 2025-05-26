@@ -198,25 +198,25 @@ namespace mlir {
                 auto get_threshold = [&] (int i) {
                     if (i < 0 || i >= (int) thresholds.size()) {
                         if(i < 0) {
-                            return thresholds_l[0];
+                            return thresholds_l[0] - 1;
                         } else {
-                            return thresholds_u[0];
+                            return thresholds_u[thresholds.size() - 1];
                         }
                     }
                     return thresholds[i];
                 };
-                for (size_t i = 0; i < thresholds.size(); ++i) {
+                for (size_t i = 0; i <= thresholds.size(); ++i) {
                     Decision2Condition condition;
                     if(m.find(decisions[i]) == m.end()) {
                         condition.decision = decisions[i];
                         condition.uppers.push_back(get_threshold(i));
-                        condition.lowers.push_back(get_threshold(i - 1));
+                        condition.lowers.push_back(get_threshold(i - 1) + 1);
                         condition.features.push_back(0);
                         m[decisions[i]] = condition;
                     } else {
                         auto &existingCondition = m[decisions[i]];
                         existingCondition.uppers.push_back(get_threshold(i));
-                        existingCondition.lowers.push_back(get_threshold(i - 1));
+                        existingCondition.lowers.push_back(get_threshold(i - 1) + 1);
                         existingCondition.features.push_back(0);
                     }
                 }
@@ -367,8 +367,17 @@ namespace mlir {
                         branches_taken++;
                         auto emittedOp = emitBranches(condition, dyn_cast<approxMLIR::KnobOp>(approxOp), rewriter, numBranches == branches_taken);
 
-                        // finally, we prepare for the next call.
+                        
                         auto ifOp = dyn_cast<scf::IfOp>(emittedOp);
+                        auto _approxOp = dyn_cast<approxMLIR::KnobOp>(approxOp);
+
+                        // emit the transformOp in the then region
+                        if (ifOp && _approxOp) { 
+                            rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+                            rewriter.create<approxMLIR::transformOp>(ifOp.getLoc(), _approxOp.getTransformType(), condition.decision);
+                        }
+                        
+                        // finally, we prepare for the next call (move on to the else region)
                         if(ifOp && numBranches != branches_taken) {
                             rewriter.setInsertionPointToStart(&ifOp.getElseRegion().front());
                         }
