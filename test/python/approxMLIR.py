@@ -32,7 +32,7 @@ class ToolBox:
         vm_module = ireert.VmModule.from_flatbuffer(ctx.instance, flatbuffer_blob)
         ctx.add_vm_module(vm_module)
         
-        return ctx.modules.module
+        return ctx.modules
     
     def link_mlir_modules(self, mlir_path1, mlir_path2, output_path, keep_temp_files=False):
         """
