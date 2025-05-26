@@ -22,6 +22,9 @@
 
 
 
+using namespace mlir;
+using namespace approxMLIR;
+
 
 namespace mlir {
     using namespace approxMLIR;
@@ -80,61 +83,29 @@ namespace mlir {
             static func::FuncOp findReplacingFunc(Operation* op, Region* parentRegion) {
                 func::FuncOp approxFunc = nullptr;
                 // if the Op is funcOp and there is an Op called approx_<name> in the module, we can replace it.
-                auto funcOp = dyn_cast<func::FuncOp>(op);
-                if (funcOp) {
+                if (isa<func::FuncOp>(op)) {
+                    auto funcOp = dyn_cast<func::FuncOp>(op);
                     auto approxFuncName = "approx_" + funcOp.getName().str();
-                    // llvm::dbgs() << "Approx func name: " << approxFuncName << "\n";
-                    for(Block &block : parentRegion->getBlocks()) {
-                        for(Operation &op : block.getOperations()) {
-                            auto approxOp = dyn_cast<func::FuncOp>(op);
-                            if (!approxOp) {
-                                continue;
+                    if (funcOp.getName() == approxFuncName) {
+                        
+                        for(Block &block : parentRegion->getBlocks()) {
+                            for(Operation &op : block.getOperations()) {
+                                auto funcOp = dyn_cast<func::FuncOp>(op);
+                                if (!funcOp) {
+                                    continue;
+                                }
+                                if (funcOp.getName() == approxFuncName) {
+                                    approxFunc = funcOp;
+                                    break;
+                                }
                             }
-                            // approxOp.dump();
-                            if (approxOp.getName() == approxFuncName) {
-                                approxFunc = approxOp;
-                                break;
-                            }
+                        }
+                        if (!approxFunc) {
+                            return nullptr; // No approximate function found, nothing to do.
                         }
                     }
                 }
                 return approxFunc;
-            }
-
-            static void dump_region(Region* region) {
-                for (Block &block : region->getBlocks()) {
-                    block.dump();
-                }
-            }
-
-            static bool handleNNSubstitute(approxMLIR::transformOp transformOp, PatternRewriter &rewriter) {
-                // auto inserted = rewriter.create<approxMLIR::transformOp>(funcOp.getLoc(), StringRef("NNsubstitute"), 1);
-                StringRef transformType = transformOp.getTransformType();
-                if(0 != transformType.compare(StringRef("NNsubstitute"))) {
-                    return false;
-                }
-                func::FuncOp approxFunc = nullptr;
-                func::FuncOp parentFuncOp = dyn_cast<func::FuncOp>(transformOp->getParentOp());
-                if (!parentFuncOp) {
-                    // we currently only support function level substitution.
-                    return false; // No approximate function found, nothing to do.
-                }
-                Region* moduleRegion = parentFuncOp->getParentRegion();
-                
-                if(!(approxFunc = findReplacingFunc(parentFuncOp, moduleRegion))) {
-                    // rewriter.eraseOp(transformOp);
-                    llvm::dbgs() << "No approx func found.\n";
-                    return false; // No approximate function found, nothing to do.
-                }
-
-                Region &replacedRegion = parentFuncOp.getBody();
-                eraseRegion(&replacedRegion, rewriter);
-
-                rewriter.cloneRegionBefore(approxFunc.getBody(), replacedRegion, parentFuncOp.getBody().end());
-
-                llvm::dbgs() << "=========================\n";
-
-                return true;
             }
 
 
@@ -153,10 +124,26 @@ namespace mlir {
                 if(0 != transformType.compare(StringRef("NNsubstitute"))) {
                     return failure();
                 }
-                if(handleNNSubstitute(transformOp, rewriter)) {
-                    return success();
+                func::FuncOp approxFunc = nullptr;
+                func::FuncOp parentFuncOp = dyn_cast<func::FuncOp>(transformOp->getParentOp());
+                if (!parentFuncOp) {
+                    // we currently only support function level substitution.
+                    return failure(); // No approximate function found, nothing to do.
                 }
-                return failure();
+                Region* parentRegion = transformOp->getParentRegion();
+                
+                if(!(approxFunc = findReplacingFunc(parentFuncOp, parentRegion))) {
+                    // rewriter.eraseOp(transformOp);
+                    llvm::errs() << "Error: transformOp is not a function.\n";
+                    return failure(); // No approximate function found, nothing to do.
+                }
+
+                Region &replacedRegion = parentFuncOp.getBody();
+                eraseRegion(&replacedRegion, rewriter);
+
+                rewriter.cloneRegionBefore(approxFunc.getBody(), replacedRegion, parentFuncOp.getBody().end());
+
+                return success();
             }
         };
 
@@ -166,6 +153,8 @@ namespace mlir {
 
             LogicalResult matchAndRewrite(approxMLIR::yieldOp yieldOp, PatternRewriter &rewriter) const final {
                 rewriter.setInsertionPoint(yieldOp);
+                // llvm::dbgs() << "-------dumping yieldOp--------\n";
+                yieldOp->getParentOp()->dump();
                 rewriter.replaceOpWithNewOp<scf::YieldOp>(yieldOp, yieldOp.getOperands());
                 return success();
             }
@@ -184,20 +173,20 @@ namespace mlir {
                 std::map<int, Value> constValues; // emitted constant values
 
                 void print() {
-                    llvm::outs() << "Decision: " << decision << "\n";
-                    llvm::outs() << "Uppers: ";
+                    llvm::dbgs()<< "Decision: " << decision << "\n";
+                    llvm::dbgs()<< "Uppers: ";
                     for (auto upper : uppers) {
-                        llvm::outs() << upper << " ";
+                        llvm::dbgs()<< upper << " ";
                     }
-                    llvm::outs() << "\nLowers: ";
+                    llvm::dbgs()<< "\nLowers: ";
                     for (auto lower : lowers) {
-                        llvm::outs() << lower << " ";
+                        llvm::dbgs()<< lower << " ";
                     }
-                    llvm::outs() << "\nFeatures: ";
+                    llvm::dbgs()<< "\nFeatures: ";
                     for (auto feature : features) {
-                        llvm::outs() << feature << " ";
+                        llvm::dbgs()<< feature << " ";
                     }
-                    llvm::outs() << "\n";
+                    llvm::dbgs()<< "\n";
                 }
             };
             
@@ -212,25 +201,25 @@ namespace mlir {
                 auto get_threshold = [&] (int i) {
                     if (i < 0 || i >= (int) thresholds.size()) {
                         if(i < 0) {
-                            return thresholds_l[0];
+                            return thresholds_l[0] - 1;
                         } else {
-                            return thresholds_u[0];
+                            return thresholds_u[thresholds.size() - 1];
                         }
                     }
                     return thresholds[i];
                 };
-                for (size_t i = 0; i < thresholds.size(); ++i) {
+                for (size_t i = 0; i <= thresholds.size(); ++i) {
                     Decision2Condition condition;
                     if(m.find(decisions[i]) == m.end()) {
                         condition.decision = decisions[i];
                         condition.uppers.push_back(get_threshold(i));
-                        condition.lowers.push_back(get_threshold(i - 1));
+                        condition.lowers.push_back(get_threshold(i - 1) + 1);
                         condition.features.push_back(0);
                         m[decisions[i]] = condition;
                     } else {
                         auto &existingCondition = m[decisions[i]];
                         existingCondition.uppers.push_back(get_threshold(i));
-                        existingCondition.lowers.push_back(get_threshold(i - 1));
+                        existingCondition.lowers.push_back(get_threshold(i - 1) + 1);
                         existingCondition.features.push_back(0);
                     }
                 }
@@ -297,7 +286,7 @@ namespace mlir {
                     c.condition_op = gteOp;
                 }
 
-                c.condition_op->getParentOp()->dump();
+                // c.condition_op->getParentOp()->dump();
 
                 return true;
             }
@@ -313,8 +302,13 @@ namespace mlir {
                 // insert the region into the if, and move the insersion point to then.
                 // the region is cloned from approxOp into the ifOp.
                 auto ifOp = rewriter.create<scf::IfOp>(loc, c.condition_op->getResult(0), !isEnd);
+                Block* originalBlock = &ifOp.getThenRegion().front();
+                rewriter.eraseOp(ifOp.thenYield());
+                rewriter.eraseBlock(originalBlock);
+                llvm::dbgs() << "========= emitting branches ===========\n";
                 Region& approxBody = approxOp.getBody();
                 rewriter.cloneRegionBefore(approxBody, ifOp.getThenRegion(), ifOp.getThenRegion().end());
+
                 
                 return ifOp;
             }
@@ -349,20 +343,25 @@ namespace mlir {
 
                 rewriter.eraseOp(decideOp);
 
-                // finally remove the
-                rewriter.setInsertionPoint(approxOp);
-
+                
                 // first analyze how many branches we have
                 int numBranches = 0, branches_taken = 0;
-
+                
                 for(auto &pair: decision2Condition) {
                     auto &condition = pair.second;
                     if(condition.condition_op) {
                         numBranches++;
                     }
                 }
-
+                
+                ModuleOp ModuleOp = approxOp->getParentOfType<mlir::ModuleOp>();
+                if(ModuleOp) {
+                    ModuleOp.dump();
+                }
+                
                 llvm::dbgs() << "Num branches to emit: " << numBranches << "\n";
+
+                rewriter.setInsertionPoint(approxOp);
 
                 for(auto &pair: decision2Condition) {
                     auto &condition = pair.second;
@@ -371,16 +370,31 @@ namespace mlir {
                         branches_taken++;
                         auto emittedOp = emitBranches(condition, dyn_cast<approxMLIR::KnobOp>(approxOp), rewriter, numBranches == branches_taken);
 
-                        // finally, we prepare for the next call.
+                        
                         auto ifOp = dyn_cast<scf::IfOp>(emittedOp);
+                        auto _approxOp = dyn_cast<approxMLIR::KnobOp>(approxOp);
+
+                        // emit the transformOp in the then region
+                        if (ifOp && _approxOp) { 
+                            rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+                            rewriter.create<approxMLIR::transformOp>(ifOp.getLoc(), _approxOp.getTransformType(), condition.decision);
+                        }
+                        
+                        // finally, we prepare for the next call (move on to the else region)
                         if(ifOp && numBranches != branches_taken) {
                             rewriter.setInsertionPointToStart(&ifOp.getElseRegion().front());
                         }
                     }
                 }
 
+                // remove the original approxOp
+                rewriter.eraseOp(approxOp);
+
+
                 llvm::dbgs() << "Num branches emitted: " << branches_taken << "\n";
 
+
+                ModuleOp.dump();
                 return success(); 
             }
         

@@ -3,7 +3,7 @@
 module {
 
 
-  func.func @decision_tree(%state: f32, %num_thresholds: i32, 
+  func.func @decision_tree(%state: i32, %num_thresholds: i32, 
                          %thresholds_uppers: tensor<3xf32>,
                          %thresholds_lowers: tensor<3xf32>,
                          %decision_values: tensor<3xi32>,
@@ -33,7 +33,6 @@ module {
       affine.store %init_val, %max_val[] : memref<f32>  // No indices for 0D memref
       
       %i_i32 = arith.index_cast %i : index to i32
-      %i_f32 = arith.sitofp %i_i32 : i32 to f32
 
       %num_thresholds = arith.constant 3 : i32
       %thresholds_uppers = arith.constant dense<[2.0, 3.0, 4.0]> : tensor<3xf32>
@@ -44,7 +43,7 @@ module {
 
       func.call @knob_start() : () -> ()
 
-      func.call @decision_tree(%i_f32, %num_thresholds, %thresholds_uppers, %thresholds_lowers, %decision_values, %thresholds, %decisions) : (f32, i32, tensor<3xf32>, tensor<3xf32>, tensor<3xi32>, tensor<3xf32>, tensor<3xi32>) -> ()
+      func.call @decision_tree(%i_i32, %num_thresholds, %thresholds_uppers, %thresholds_lowers, %decision_values, %thresholds, %decisions) : (i32, i32, tensor<3xf32>, tensor<3xf32>, tensor<3xi32>, tensor<3xf32>, tensor<3xi32>) -> ()
     
       affine.for %j = 1 to 16 {
         // here inject the observeOp, decideOp (optionally checkOp)
@@ -68,24 +67,25 @@ module {
     return 
   }
 
-  func.func @func1(%11 : index, %c : i1) {
-    %12 = memref.alloc(%11) : memref<?xf32>
-      %28 = memref.alloca() : memref<16x16xf32>
-      affine.for %arg4 = 0 to 16 {
-        affine.for %barg4 = 0 to 16 {
-          %29 = scf.if %c -> f32 {
-            %l1 = affine.load %28[%arg4, 0] : memref<16x16xf32>
-            scf.yield %l1 : f32
-          } else {
-            %a = affine.load %12[1] : memref<?xf32>
-            affine.store %a, %12[0] : memref<?xf32>
-            scf.yield %a : f32
-          }
-          %a = affine.load %12[0] : memref<?xf32>
-          %z = arith.addf %a, %29 : f32
-          affine.store %z, %12[0] : memref<?xf32>
-        }
-    }
-    return
-  }
+ func.func @func1(%11 : index, %c : i1) {
+   %12 = memref.alloc(%11) : memref<?xf32>
+     %28 = memref.alloca() : memref<16x16xf32>
+     affine.for %arg4 = 0 to 16 {
+       affine.for %barg4 = 0 to 16 {
+         %29 = scf.if %c -> f32 {
+           %l1 = affine.load %28[%arg4, 0] : memref<16x16xf32>
+           scf.yield %l1 : f32
+         } else {
+           %a = affine.load %12[1] : memref<?xf32>
+           affine.store %a, %12[0] : memref<?xf32>
+           scf.yield %a : f32
+         }
+         %a = affine.load %12[0] : memref<?xf32>
+         %z = arith.addf %a, %29 : f32
+         affine.store %z, %12[0] : memref<?xf32>
+       }
+   }
+   return
+ }
+
 }

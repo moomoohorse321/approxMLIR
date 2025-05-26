@@ -206,7 +206,7 @@ def approxMLIR_KnobOp : approxMLIR_Op<"knob">  {
         ```
     }];
 
-    let arguments = (ins AnyType:$state, I32Attr:$id, I32Attr:$rf, DenseI32ArrayAttr:$QoS_in, DenseI32ArrayAttr:$QoS_out, Variadic<AnyType>:$args, SymbolNameAttr: $trnasform_type); //  state, rf, QoS_in, QoS_out, args
+    let arguments = (ins AnyType:$state, I32Attr:$id, I32Attr:$rf, DenseI32ArrayAttr:$QoS_in, DenseI32ArrayAttr:$QoS_out, Variadic<AnyType>:$args, SymbolNameAttr: $transform_type); //  state, rf, QoS_in, QoS_out, args
     let results = (outs Variadic<AnyType>:$results);
     let regions = (region AnyRegion:$body);
 
