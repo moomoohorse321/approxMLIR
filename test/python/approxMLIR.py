@@ -18,23 +18,18 @@ class ToolBox:
     @staticmethod
     def load_mlir_from_file(mlir_path, backend_name = "cpu"):
         if backend_name == "cpu":        
-            backend_choice = "iree_llvmcpu (CPU)" #@param [ "iree_vmvx (CPU)", "iree_llvmcpu (CPU)", "iree_vulkan (GPU/SwiftShader)" ]
             target_backends = ["llvm-cpu"]
         elif backend_name == "gpu":
-            backend_choice = "iree_vulkan (GPU/SwiftShader)"
             target_backends = ["cuda"]
         else:
             raise ValueError("Unsupported backend name. Use 'cpu' or 'gpu'.")
-        # backend_choice = backend_choice.split(" ")[0]
-        # backend = module_utils.BackendInfo(backend_choice)
-        # print("Backend choice:", backend_choice)
         
         with open(mlir_path, "r") as f:
             mlir_module = f.read()
 
         flatbuffer_blob = compile_str(mlir_module, target_backends=target_backends, input_type="stablehlo")
 
-        config = ireert.Config("cuda")
+        config = ireert.Config(target_backends[0])
         ctx = ireert.SystemContext(config=config)
         vm_module = ireert.VmModule.from_flatbuffer(ctx.instance, flatbuffer_blob)
         ctx.add_vm_module(vm_module)
