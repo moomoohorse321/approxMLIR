@@ -1,7 +1,6 @@
-# An out-of-tree dialect template for MLIR
+# ApproxMLIR 
 
-This repository contains a template for an out-of-tree [MLIR](https://mlir.llvm.org/) dialect as well as a
-approxMLIR `opt`-like tool to operate on that dialect.
+ApproxMLIR is an MLIR dialect for representing approximate computations for various applications. It is designed to facilitate the development of algorithms that can tolerate some level of approximation, which can lead to improved performance and reduced resource usage in various applications.
 
 ## How to build
 
@@ -33,6 +32,10 @@ cmake --build . --target mlir-doc
 ```
 **Note**: Make sure to pass `-DLLVM_INSTALL_UTILS=ON` when building LLVM with
 CMake so that it installs `FileCheck` to the chosen installation prefix.
+
+## Developer
+
+* Add a pass : see [commit link](https://github.com/moomoohorse321/approxMLIR/commit/ff1bdb01154f5190e3c836aea376de3b870b870f)
 
 ## License
 
