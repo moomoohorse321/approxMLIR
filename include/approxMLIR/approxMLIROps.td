@@ -226,6 +226,37 @@ def utilAnnoationFuncSubstitutionOp : approxMLIR_Op<"util.annoatation.func_subst
     let arguments = (ins SymbolNameAttr: $from, SymbolNameAttr: $to);
 }
 
+def utilAnnotationDecisionTreeOp : approxMLIR_Op<"util.annotation.decision_tree"> {
+    let summary = "A utility Op to support identifying the scope and the attribtues of the decision tree.";
+    let description = [{
+        This op annotates the modules to identify:
+            * The function to inject decision tree
+            * a set of attributes that are identical to the attributes of the decision tree Op.
+        
+        By lowering this Op, the decision tree op will be injected to the module with the specified attributes.
+
+        Example:
+        ```mlir
+        "approxMLIR.util.annotation.decision_tree"() <{
+            decision_tree = "main",
+            num_thresholds = 1 : i32,
+            thresholds_uppers = array<i32: 10>,
+            thresholds_lowers = array<i32: 0>,
+            decision_values = array<i32: 0, 1>,
+            thresholds = array<i32: 5>,
+            decisions = array<i32: 0, 1>
+        }> : () -> ()
+        ```
+    }];
+
+    let arguments = (ins SymbolNameAttr: $func_name,
+                         I32Attr: $num_thresholds,
+                         DenseI32ArrayAttr: $thresholds_uppers,
+                         DenseI32ArrayAttr: $thresholds_lowers,
+                         DenseI32ArrayAttr: $decision_values,
+                         DenseI32ArrayAttr: $thresholds,
+                         DenseI32ArrayAttr: $decisions);
+}
 
 
 #endif // APPROXMLIR_OPS
