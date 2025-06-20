@@ -125,20 +125,17 @@ struct ConifgureNN4Func : public OpRewritePattern<approxMLIR::transformOp> {
     if (0 != transformType.compare(StringRef("NNsubstitute"))) {
       return failure();
     }
-    func::FuncOp approxFunc = nullptr;
     func::FuncOp parentFuncOp =
         dyn_cast<func::FuncOp>(transformOp->getParentOp());
-    if (!parentFuncOp) {
-      // we currently only support function level substitution.
-      return failure(); // No approximate function found, nothing to do.
-    }
-    Region *parentRegion = transformOp->getParentRegion();
 
-    if (!(approxFunc = findReplacingFunc(parentFuncOp, parentRegion))) {
-      // rewriter.eraseOp(transformOp);
-      llvm::errs() << "Error: transformOp is not a function.\n";
-      return failure(); // No approximate function found, nothing to do.
-    }
+    assert(parentFuncOp &&
+           "we currently only support function level substitution.");
+
+    Region *parentRegion = transformOp->getParentRegion();
+    func::FuncOp approxFunc = findReplacingFunc(parentFuncOp, parentRegion);
+
+    assert(approxFunc && "NN4Func transformOp must be replaced by an approx "
+                         "function (not available).");
 
     Region &replacedRegion = parentFuncOp.getBody();
     eraseRegion(&replacedRegion, rewriter);
@@ -150,12 +147,110 @@ struct ConifgureNN4Func : public OpRewritePattern<approxMLIR::transformOp> {
   }
 };
 
-struct TransformApproxPass : public impl::TransformApproxPassBase<TransformApproxPass> {
+struct LoopPerforateTransformation : public OpRewritePattern<approxMLIR::transformOp> {
+  using OpRewritePattern<approxMLIR::transformOp>::OpRewritePattern;
+
+private:
+  /**
+   * Find the first scf.for loop after the given operation
+   */
+  scf::ForOp findFirstLoopAfter(Operation* startOp) const {
+    Operation* currentOp = startOp->getNextNode();
+    
+    while (currentOp) {
+      if (auto forOp = dyn_cast<scf::ForOp>(currentOp)) {
+        return forOp;
+      }
+      currentOp = currentOp->getNextNode();
+    }
+    
+    return nullptr;
+  }
+
+  /**
+   * Clone the body from original loop to new loop
+   */
+  void cloneLoopBody(PatternRewriter &rewriter, scf::ForOp originalLoop, 
+                     scf::ForOp newLoop) const {
+    // Clone the region
+    rewriter.cloneRegionBefore(originalLoop.getRegion(), newLoop.getRegion(), 
+                               newLoop.getRegion().end());
+    
+    // Get the entry block and cloned block
+    Block& entryBlock = newLoop.getRegion().front();
+    Block& clonedBlock = *std::next(newLoop.getRegion().begin());
+    
+    // Collect the entry block arguments to use as replacements
+    SmallVector<Value> entryArgs;
+    for (auto arg : entryBlock.getArguments()) {
+      entryArgs.push_back(arg);
+    }
+    
+    // Merge the blocks, using entry block arguments to replace cloned block arguments
+    rewriter.mergeBlocks(&clonedBlock, &entryBlock, entryArgs);
+  }
+
+public:
+  /**
+   * Find the first loop in the region that contains a transformOp, perforate it based on the decision value.
+   * A decision value is an integer indicating an error knob (i.e how much accuracy loss it will bring)
+   * The current policy is:
+   * actual stride = original stride * decision_val
+   */
+  LogicalResult matchAndRewrite(approxMLIR::transformOp transformOp,
+                                PatternRewriter &rewriter) const final {
+    
+    // Check if this is a loop perforation transformation
+    if (transformOp.getTransformType() != "loop_perforate") {
+      return failure();
+    }
+    
+    // Get the decision value (knob value)
+    int32_t decisionValue = transformOp.getKnobVal();
+    
+    // Skip if decision value is 0 (would result in infinite loop) or 1 (no change)
+    if (decisionValue <= 1) {
+      rewriter.eraseOp(transformOp);
+      return success();
+    }
+    
+    // Find the first scf.for loop after the transformOp
+    scf::ForOp targetLoop = findFirstLoopAfter(transformOp);
+    assert(targetLoop && "invalid input: transformOp must be applicable");
+    
+    // Create the new step value: new_step = original_step * decision_value
+    Location loc = targetLoop.getLoc();
+    rewriter.setInsertionPoint(targetLoop);
+    
+    Value decisionConstant = rewriter.create<arith::ConstantIndexOp>(loc, decisionValue);
+    Value newStep = rewriter.create<arith::MulIOp>(loc, targetLoop.getStep(), decisionConstant);
+    // Create the new perforated loop
+    auto newLoop = rewriter.create<scf::ForOp>(
+      loc,
+      targetLoop.getLowerBound(),
+      targetLoop.getUpperBound(),
+      newStep,
+      targetLoop.getInitArgs()
+    );
+    
+    cloneLoopBody(rewriter, targetLoop, newLoop);
+    
+    rewriter.replaceOp(targetLoop, newLoop);
+    
+    rewriter.eraseOp(transformOp);
+    
+    return success();
+  }
+};
+
+struct TransformApproxPass
+    : public impl::TransformApproxPassBase<TransformApproxPass> {
   using TransformApproxPassBase::TransformApproxPassBase;
 
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
     patterns.add<ConifgureNN4Func>(&getContext());
+    patterns.add<LoopPerforateTransformation>(&getContext());
     GreedyRewriteConfig config;
     config.maxIterations = 1; // to debug
     (void)(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns)),

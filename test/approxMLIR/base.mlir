@@ -4,7 +4,7 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : 
   // 1. emit 2 call ops to the knob_start and knob_end functions
   // 2. emit a decision tree in the function (in this case, "main") which should fall within the knob_start and knob_end calls
   
-  "approxMLIR.util.annotation.decision_tree"() <{decision_values = array<i32: 0, 1>, decisions = array<i32: 0, 1>, func_name = "main", num_thresholds = 1 : i32, thresholds = array<i32: 2>, thresholds_lowers = array<i32: 0>, thresholds_uppers = array<i32: 4>}> : () -> ()
+  "approxMLIR.util.annotation.decision_tree"() <{decision_values = array<i32: 0, 1>, decisions = array<i32: 1, 2>, func_name = "main", num_thresholds = 1 : i32, thresholds = array<i32: 2>, thresholds_lowers = array<i32: 0>, thresholds_uppers = array<i32: 4>}> : () -> ()
 
   func.func @knob_start() {
     return 
