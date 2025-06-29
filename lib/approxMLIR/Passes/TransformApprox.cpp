@@ -1,5 +1,25 @@
+/**
+ * This file contains passes that rewrite the MLIR into approximate form.
+ * 
+ * To enable rewriting, a transformOp must be injected in the region to rewrite.
+ * 
+ * A transformOp indicates the rewrite type and the error knob (how much loss of accuracy we want to inject)
+ * 
+ * Each type of transformOp will have an effect on the region to rewrite. For example, a loop-peforate transformation will transform the first
+ * loop it encoutners (currently non-recursively).
+ * 
+ * This file will need 2 modifications:
+ * G1: scale up the # of transformations
+ * G2: improve the generality of the transformation (e.g. identify the loops recusrively)
+ * 
+ * Work-items:
+ * W1: Add quantization
+ * W2: Improve loop identification
+ * W3: Make function substitution fully work INSIDE decision tree branches.
+ *  W3.1: Have a pass that convert a function to a call to its body
+ *  W3.2: Then the rewrite can be a replacement to the call in each branch.
+ */
 #include "PassDetails.h"
-
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"

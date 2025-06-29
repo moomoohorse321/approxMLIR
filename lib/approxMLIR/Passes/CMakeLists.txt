@@ -1,4 +1,5 @@
 add_mlir_dialect_library(MLIRApproxMLIRTransforms
+  PreEmitTransformations.cpp
   EmitApprox.cpp
   ConfigApprox.cpp
   TransformApprox.cpp
