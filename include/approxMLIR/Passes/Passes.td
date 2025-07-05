@@ -4,7 +4,7 @@
 include "mlir/Pass/PassBase.td"
 include "mlir/Rewrite/PassUtil.td"
 
-def PreEmitTransformationPass : Pass<"pre-emit-trasnform"> {
+def PreEmitTransformationPass : Pass<"pre-emit-transform"> {
   let summary = "Transform the pre-emit MLIR";
   let constructor = "mlir::approxMLIR::createPreEmitTransformationPass()";
   let dependentDialects = ["func::FuncDialect", "approxMLIR::approxMLIRDialect"];

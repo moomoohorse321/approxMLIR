@@ -214,6 +214,18 @@ def approxMLIR_KnobOp : approxMLIR_Op<"knob">  {
 
 // ------------------- Utility Ops ------------------- //
 
+def utilAnnotationConvertToCallOp : approxMLIR_Op<"util.annoatation.convert_to_call"> {
+    let summary = "A utility Op to convert a function to a call to its body.";
+    let description = [{
+        Example:
+        ```mlir
+            "approxMLIR.util.annoatation.convert_to_call"() <{func_name = "main"}> : () -> ()
+        ```
+    }];
+
+    let arguments = (ins SymbolNameAttr: $func_name);
+}
+
 def utilAnnoationFuncSubstitutionOp : approxMLIR_Op<"util.annoatation.func_substitution"> {
     let summary = "A utility Op to print the annoation of the module.";
     let description = [{
