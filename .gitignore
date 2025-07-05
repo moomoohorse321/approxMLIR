@@ -8,3 +8,6 @@ cmake-build-debug/
 cmake-build-release/
 
 compile_commands.json
+.DS_Store
+test/approxMLIR/annotated.mlir
+test/approxMLIR/debug.mlir
