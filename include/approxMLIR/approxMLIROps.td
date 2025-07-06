@@ -103,7 +103,8 @@ def decideOp : approxMLIR_Op<"decide"> {
               num_thresholds = 1 : i32,
               thresholds = array<i32: 2>,
               thresholds_lowers = array<i32: 0>,
-              thresholds_uppers = array<i32: 4>
+              thresholds_uppers = array<i32: 4>,
+            transform_type = "func_substitution"
           }> : (f32) -> ()
         ```
     }];
@@ -114,7 +115,9 @@ def decideOp : approxMLIR_Op<"decide"> {
                          DenseI32ArrayAttr: $thresholds_lowers,
                          DenseI32ArrayAttr: $decision_values,
                          DenseI32ArrayAttr: $thresholds,
-                         DenseI32ArrayAttr: $decisions);
+                         DenseI32ArrayAttr: $decisions,
+                         SymbolNameAttr: $transform_type
+                        );
 
     // Corrected assemblyFormat: Removed quotes around parentheses. Used backticks for colon.
     let assemblyFormat = "`(` $state `)` attr-dict `:` type($state)";
@@ -226,18 +229,6 @@ def utilAnnotationConvertToCallOp : approxMLIR_Op<"util.annoatation.convert_to_c
     let arguments = (ins SymbolNameAttr: $func_name);
 }
 
-def utilAnnoationFuncSubstitutionOp : approxMLIR_Op<"util.annoatation.func_substitution"> {
-    let summary = "A utility Op to print the annoation of the module.";
-    let description = [{
-        Example:
-        ```mlir
-            "approxMLIR.util.annoatation.func_substitution"() <{from = "predict", to = "approx_predict"}> : () -> ()
-        ```
-    }];
-
-    let arguments = (ins SymbolNameAttr: $from, SymbolNameAttr: $to);
-}
-
 def utilAnnotationDecisionTreeOp : approxMLIR_Op<"util.annotation.decision_tree"> {
     let summary = "A utility Op to support identifying the scope and the attribtues of the decision tree.";
     let description = [{
@@ -251,6 +242,7 @@ def utilAnnotationDecisionTreeOp : approxMLIR_Op<"util.annotation.decision_tree"
         ```mlir
         "approxMLIR.util.annotation.decision_tree"() <{
             decision_tree = "main",
+            transform_type = "loop_perforate",
             num_thresholds = 1 : i32,
             thresholds_uppers = array<i32: 10>,
             thresholds_lowers = array<i32: 0>,
@@ -262,6 +254,7 @@ def utilAnnotationDecisionTreeOp : approxMLIR_Op<"util.annotation.decision_tree"
     }];
 
     let arguments = (ins SymbolNameAttr: $func_name,
+                         SymbolNameAttr: $transform_type,   
                          I32Attr: $num_thresholds,
                          DenseI32ArrayAttr: $thresholds_uppers,
                          DenseI32ArrayAttr: $thresholds_lowers,

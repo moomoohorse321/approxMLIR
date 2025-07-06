@@ -54,74 +54,18 @@ static void dump_region(Region *region) {
     block.dump();
 }
 
-struct ConifgureNN4Func : public OpRewritePattern<approxMLIR::transformOp> {
+struct FunctionSubstitution : public OpRewritePattern<approxMLIR::transformOp> {
   using OpRewritePattern<approxMLIR::transformOp>::OpRewritePattern;
-
-  static void eraseRegion(Region *region, PatternRewriter &rewriter) {
-    std::queue<Block *> blocksToErase;
-    auto try_delete_block = [&](Block *block) {
-      // the make_early_inc_range is used to ensure that we can safely erase ops
-      for (auto &op : llvm::make_early_inc_range(llvm::reverse(*block))) {
-        // for an op to be deleted, all its uses must be deleted.
-        if (!op.use_empty()) {
-          // failed, there are some ops that has uses outside the block.
-          return false;
-        } else {
-          rewriter.eraseOp(&op);
-        }
-      }
-      return true;
-    };
-    // Note: you must first put it in a list, otherwise you will damage iterator
-    for (Block &block : llvm::reverse(region->getBlocks())) {
-      blocksToErase.push(&block);
-    }
-
-    // when we dequee, we reset.
-    // Otherwise we decrement. Once it's zero, it means an infinite loop.
-    int errCounter = blocksToErase.size();
-
-    while (!blocksToErase.empty()) {
-      Block *block = blocksToErase.front();
-      blocksToErase.pop();
-      if (try_delete_block(block)) {
-        rewriter.eraseBlock(block);
-        errCounter = blocksToErase.size();
-      } else {
-        blocksToErase.push(block);
-        errCounter--;
-      }
-      if (!blocksToErase.empty() && errCounter <= 0) {
-        block->dump();
-        llvm::errs() << "Error: Infinite loop detected while erasing blocks.\n";
-        return;
-      }
-    }
-  }
-
-  static func::FuncOp findReplacingFunc(Operation *op, Region *parentRegion) {
+  // if there is an Op called approx_<name> in the module, we can replace it.
+  static func::FuncOp findReplacingFunc(func::FuncOp funcOp, Region *parentRegion) {
     func::FuncOp approxFunc = nullptr;
-    // if the Op is funcOp and there is an Op called approx_<name> in the
-    // module, we can replace it.
-    if (isa<func::FuncOp>(op)) {
-      auto funcOp = dyn_cast<func::FuncOp>(op);
-      auto approxFuncName = "approx_" + funcOp.getName().str();
-      if (funcOp.getName() == approxFuncName) {
-
-        for (Block &block : parentRegion->getBlocks()) {
-          for (Operation &op : block.getOperations()) {
-            auto funcOp = dyn_cast<func::FuncOp>(op);
-            if (!funcOp) {
-              continue;
-            }
-            if (funcOp.getName() == approxFuncName) {
-              approxFunc = funcOp;
-              break;
-            }
-          }
-        }
-        if (!approxFunc) {
-          return nullptr; // No approximate function found, nothing to do.
+    auto approxFuncName = "approx_" + funcOp.getName().str();
+    for (Block &block : parentRegion->getBlocks()) {
+      for (Operation &op : block.getOperations()) {
+        auto _funcOp = dyn_cast<func::FuncOp>(op);
+        if (_funcOp && _funcOp.getName() == approxFuncName) {
+          approxFunc = _funcOp;
+          break;
         }
       }
     }
@@ -138,36 +82,28 @@ struct ConifgureNN4Func : public OpRewritePattern<approxMLIR::transformOp> {
    */
   LogicalResult matchAndRewrite(approxMLIR::transformOp transformOp,
                                 PatternRewriter &rewriter) const final {
-
-    // auto inserted = rewriter.create<approxMLIR::transformOp>(funcOp.getLoc(),
-    // StringRef("NNsubstitute"), 1);
     StringRef transformType = transformOp.getTransformType();
-    if (0 != transformType.compare(StringRef("NNsubstitute"))) {
-      return failure();
-    }
-    func::FuncOp parentFuncOp =
-        dyn_cast<func::FuncOp>(transformOp->getParentOp());
 
-    assert(parentFuncOp &&
-           "we currently only support function level substitution.");
+    if (0 != transformType.compare(StringRef("func_substitute")))
+      return failure();
+    
+    // find the parent funcOp (since current region can be deeply nested)
+    Operation* parentFuncOp = transformOp; 
+    while(!dyn_cast<func::FuncOp>(parentFuncOp->getParentOp())) 
+      parentFuncOp = parentFuncOp->getParentOp();
 
     Region *parentRegion = transformOp->getParentRegion();
-    func::FuncOp approxFunc = findReplacingFunc(parentFuncOp, parentRegion);
+    func::FuncOp approxFunc = findReplacingFunc(dyn_cast<func::FuncOp>(parentFuncOp), parentRegion);
 
-    assert(approxFunc && "NN4Func transformOp must be replaced by an approx "
-                         "function (not available).");
-
-    Region &replacedRegion = parentFuncOp.getBody();
-    eraseRegion(&replacedRegion, rewriter);
-
-    rewriter.cloneRegionBefore(approxFunc.getBody(), replacedRegion,
-                               parentFuncOp.getBody().end());
-
+    assert(approxFunc && "NN4Func transformOp must be replaced by an approx function (not available).");
+    
+    // it's assumed that the region that contains transformOp only has one additonal op (which is a call to __internal_<func_name>)
+    // your task: change the call __internal_<func_name> to call approx_<func_name>
     return success();
   }
 };
 
-struct LoopPerforateTransformation : public OpRewritePattern<approxMLIR::transformOp> {
+struct LoopPerforation : public OpRewritePattern<approxMLIR::transformOp> {
   using OpRewritePattern<approxMLIR::transformOp>::OpRewritePattern;
 
 private:
@@ -269,8 +205,8 @@ struct TransformApproxPass
 
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
-    patterns.add<ConifgureNN4Func>(&getContext());
-    patterns.add<LoopPerforateTransformation>(&getContext());
+    patterns.add<FunctionSubstitution>(&getContext());
+    patterns.add<LoopPerforation>(&getContext());
     GreedyRewriteConfig config;
     config.maxIterations = 1; // to debug
     (void)(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns)),

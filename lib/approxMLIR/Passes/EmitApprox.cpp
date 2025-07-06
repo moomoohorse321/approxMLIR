@@ -183,10 +183,12 @@ struct AnnocationOpConversion : public OpRewritePattern<func::CallOp> {
   static Block* moveMarkedOpsToNewBlock(Region* region, std::vector<Operation *> &opsToMove, // in
                                         std::vector<Operation *> &opsInRegion, // out
                                         PatternRewriter &rewriter,
-                                        Operation *&end_knob, Value &state) {
+                                        Operation *&end_knob, Value &state,
+                                        StringRef &transformType) {
     Block *newBlock = rewriter.createBlock(region, region->end(), std::nullopt, std::nullopt);
     IRMapping m;
     rewriter.setInsertionPointToEnd(newBlock);
+    // we must first initialize opsInRegion which moveOpToNewBlock requires
     for(auto* op: opsToMove) {
       Operation* clonedOp = rewriter.clone(*op);
       opsInRegion.push_back(clonedOp);
@@ -203,10 +205,11 @@ struct AnnocationOpConversion : public OpRewritePattern<func::CallOp> {
         end_knob = newCallOp;
       
       approxMLIR::decideOp new_decide_op = dyn_cast<approxMLIR::decideOp>(clonedOp);
-      if (new_decide_op)
+      if (new_decide_op) {
         state = new_decide_op.getState();
+        transformType = new_decide_op.getTransformType();
+      }
     }
-    // dump_region(region);
     return newBlock;
   }
 
@@ -239,6 +242,7 @@ struct AnnocationOpConversion : public OpRewritePattern<func::CallOp> {
 
     // decision tree arguments
     Value state;
+    StringRef transformType;
 
     bool in_knob = false;
     Region *region = nullptr;
@@ -262,7 +266,7 @@ struct AnnocationOpConversion : public OpRewritePattern<func::CallOp> {
 
     // step 2: move Ops to the new block
     // First emit Ops to the new block, then move the new block to the body of the approxForOp
-    Block *tempBlock = moveMarkedOpsToNewBlock(region, opsToMove, opsInRegion, rewriter, end_knob, state);
+    Block *tempBlock = moveMarkedOpsToNewBlock(region, opsToMove, opsInRegion, rewriter, end_knob, state, transformType);
     findAllUses(region, opsInRegion, results, resultTypes);
     
     findAllDefs(opsInRegion, region, producerVals);
@@ -276,7 +280,7 @@ struct AnnocationOpConversion : public OpRewritePattern<func::CallOp> {
     auto approxOp = rewriter.create<approxMLIR::KnobOp>(
         start_knob->getLoc(), TypeRange(ArrayRef<Type>(resultTypes)), state, 0, 0,
         std::vector<int>{}, std::vector<int>{}, producerVals,
-        "loop_perforate"); // todo : temporarily set rf, QoS_in, and QoS_out to 0
+        transformType); // todo : temporarily set rf, QoS_in, and QoS_out to 0
     opsInRegion.push_back(approxOp);         
     rewriter.eraseOp(start_knob);
     // step 4: move the tempBlock to the approxOp
@@ -294,45 +298,6 @@ struct AnnocationOpConversion : public OpRewritePattern<func::CallOp> {
     // step 6: clean up
     rewriter.restoreInsertionPoint(savedInsertPoint);
     // dump_region(region);
-    return success();
-  }
-};
-
-/**
- * An annotation Op for function substitution will contain <from> and <to>
- * attributes. It will insert a transformOp to the <from> function at
- * appropriate location.
- */
-struct EmitFuncSubstituteAnnotation
-    : public OpRewritePattern<approxMLIR::utilAnnoationFuncSubstitutionOp> {
-  using OpRewritePattern<
-      approxMLIR::utilAnnoationFuncSubstitutionOp>::OpRewritePattern;
-
-  LogicalResult
-  matchAndRewrite(approxMLIR::utilAnnoationFuncSubstitutionOp annotationOp,
-                  PatternRewriter &rewriter) const final {
-    StringRef from = annotationOp.getFrom();
-    // StringRef to = annotationOp.getTo(); now we assume we always replace XXX with approxXXX
-    Region *parentRegion = annotationOp->getParentRegion();
-
-    // Iterate through the region to locate the <from> function
-    for (Block &block : parentRegion->getBlocks()) {
-      for (Operation &op : block.getOperations()) {
-        if (auto funcOp = dyn_cast<func::FuncOp>(op)) {
-          // llvm::dbgs() << "funcOp: " << funcOp.getSymName() << "\n";
-          if (funcOp.getSymName().compare(from) == 0) {
-            Region &funcBody = funcOp.getBody();
-            rewriter.setInsertionPointToStart(&funcBody.front());
-            rewriter.create<approxMLIR::transformOp>(
-                funcOp.getLoc(), StringRef("NNsubstitute"), 1);
-            // Create a new function with the same signature as the original
-            break; // Stop after replacing the first occurrence
-          }
-        }
-      }
-    }
-
-    rewriter.eraseOp(annotationOp);
     return success();
   }
 };
@@ -371,7 +336,7 @@ struct EmitDecisionTreeAnnotation
         funcOp.getLoc(), std::nullopt, getState(funcOp),
         annotationOp.getNumThresholds(), annotationOp.getThresholdsUppers(),
         annotationOp.getThresholdsLowers(), annotationOp.getDecisionValues(),
-        annotationOp.getThresholds(), annotationOp.getDecisions());
+        annotationOp.getThresholds(), annotationOp.getDecisions(), annotationOp.getTransformType());
 
     // Remove the annotation operation
     rewriter.eraseOp(annotationOp);
@@ -394,7 +359,6 @@ struct EmitApproxPass : public impl::EmitApproxPassBase<EmitApproxPass> {
   void runOnOperation() override {
     ConversionTarget target(getContext());
 
-    target.addIllegalOp<approxMLIR::utilAnnoationFuncSubstitutionOp>();
     target.addIllegalOp<approxMLIR::utilAnnotationDecisionTreeOp>();
 
     target.addDynamicallyLegalOp<func::CallOp>([](func::CallOp op) {
@@ -407,7 +371,6 @@ struct EmitApproxPass : public impl::EmitApproxPassBase<EmitApproxPass> {
 
     RewritePatternSet patterns(&getContext());
     patterns.add<AnnocationOpConversion>(&getContext());
-    patterns.add<EmitFuncSubstituteAnnotation>(&getContext());
     patterns.add<EmitDecisionTreeAnnotation>(&getContext());
     // GreedyRewriteConfig config;
     // config.maxIterations = 1;
