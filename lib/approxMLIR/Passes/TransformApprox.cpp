@@ -13,7 +13,7 @@
  * G2: improve the generality of the transformation (e.g. identify the loops recusrively)
  * 
  * Work-items:
- * W1: Add quantization
+ * W1: Add Task Skipping.
  * W2: Improve loop identification
  * W3: Make function substitution fully work INSIDE decision tree branches.
  *  W3.1: Have a pass that convert a function to a call to its body
@@ -91,8 +91,8 @@ struct FunctionSubstitution : public OpRewritePattern<approxMLIR::transformOp> {
     Operation* parentFuncOp = transformOp; 
     while(!dyn_cast<func::FuncOp>(parentFuncOp->getParentOp())) 
       parentFuncOp = parentFuncOp->getParentOp();
-
-    Region *parentRegion = transformOp->getParentRegion();
+    parentFuncOp = parentFuncOp->getParentOp();
+    Region *parentRegion = parentFuncOp->getParentRegion();
     func::FuncOp approxFunc = findReplacingFunc(dyn_cast<func::FuncOp>(parentFuncOp), parentRegion);
 
     assert(approxFunc && "NN4Func transformOp must be replaced by an approx function (not available).");
@@ -110,17 +110,17 @@ private:
   /**
    * Find the first scf.for loop after the given operation
    */
-  scf::ForOp findFirstLoopAfter(Operation* startOp) const {
-    Operation* currentOp = startOp->getNextNode();
-    
-    while (currentOp) {
-      if (auto forOp = dyn_cast<scf::ForOp>(currentOp)) {
-        return forOp;
+  scf::ForOp findFirstLoopIn(Region* region) const {
+    // walk through to find the first loop
+    scf::ForOp firstLoop = nullptr;
+    region->walk([&](scf::ForOp forOp) {
+      if (!firstLoop) {
+        firstLoop = forOp;
+        return WalkResult::interrupt();
       }
-      currentOp = currentOp->getNextNode();
-    }
-    
-    return nullptr;
+      return WalkResult::advance();
+    });
+    return firstLoop;
   }
 
   /**
@@ -163,6 +163,7 @@ public:
     
     // Get the decision value (knob value)
     int32_t decisionValue = transformOp.getKnobVal();
+    Region* region = transformOp->getParentRegion();
     
     // Skip if decision value is 0 (would result in infinite loop) or 1 (no change)
     if (decisionValue <= 1) {
@@ -171,7 +172,7 @@ public:
     }
     
     // Find the first scf.for loop after the transformOp
-    scf::ForOp targetLoop = findFirstLoopAfter(transformOp);
+    scf::ForOp targetLoop = findFirstLoopIn(region);
     assert(targetLoop && "invalid input: transformOp must be applicable");
     
     // Create the new step value: new_step = original_step * decision_value
@@ -193,6 +194,143 @@ public:
     
     rewriter.replaceOp(targetLoop, newLoop);
     
+    rewriter.eraseOp(transformOp);
+    
+    return success();
+  }
+};
+
+struct TaskSkipping : public OpRewritePattern<approxMLIR::transformOp> {
+  using OpRewritePattern<approxMLIR::transformOp>::OpRewritePattern;
+
+private:
+  /**
+   * Find the first scf.if or scf.index_switch operation in the given region
+   */
+  Operation* findFirstBranchingOp(Region* region) const {
+    Operation* branchingOp = nullptr;
+    region->walk([&](Operation* op) {
+      if (isa<scf::IfOp>(op) || isa<scf::IndexSwitchOp>(op)) {
+        branchingOp = op;
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+    return branchingOp;
+  }
+
+  /**
+   * Clear all operations in the region except the terminator
+   */
+  void clearRegionPayload(PatternRewriter &rewriter, Region* region) const {
+    Block& block = region->front();
+    
+    // Collect all non-terminator ops
+    SmallVector<Operation*> opsToErase;
+    for (Operation& op : block) {
+      if (!op.hasTrait<OpTrait::IsTerminator>()) {
+        opsToErase.push_back(&op);
+      }
+    }
+    
+    // Erase them
+    for (Operation* op : opsToErase) {
+      rewriter.eraseOp(op);
+    }
+  }
+
+  /**
+   * Replace a branching operation with one of its regions
+   * Returns true if replacement was successful, false otherwise
+   */
+  bool replaceBranchingOpWithRegion(PatternRewriter &rewriter, 
+                                    Operation* branchingOp, 
+                                    unsigned regionIndex) const {
+    if (auto ifOp = dyn_cast<scf::IfOp>(branchingOp)) {
+      // For scf.if, regionIndex 0 = then, 1 = else
+      if (regionIndex >= ifOp.getNumRegions()) {
+        return false; // Invalid index, preserve everything
+      }
+      
+      Region& selectedRegion = ifOp.getRegion(regionIndex);
+      if (selectedRegion.empty()) {
+        // No region to inline, just remove the if
+        rewriter.eraseOp(ifOp);
+        return true;
+      }
+      
+      // Get the yield values from the selected region
+      auto yieldOp = cast<scf::YieldOp>(selectedRegion.front().getTerminator());
+      SmallVector<Value> yieldValues(yieldOp.getOperands());
+      
+      // Inline the selected region
+      rewriter.setInsertionPoint(ifOp);
+      rewriter.inlineBlockBefore(&selectedRegion.front(), ifOp, yieldValues);
+      
+      // Replace if results with yield values
+      rewriter.replaceOp(ifOp, yieldValues);
+      return true;
+      
+    } else if (auto indexSwitchOp = dyn_cast<scf::IndexSwitchOp>(branchingOp)) {
+      // For scf.index_switch, regionIndex corresponds to case index
+      if (regionIndex >= indexSwitchOp.getCaseRegions().size()) {
+        // Index out of bounds, preserve everything
+        return false;
+      }
+      
+      // Get the selected case region
+      Region& selectedRegion = indexSwitchOp.getCaseRegions()[regionIndex];
+      if (selectedRegion.empty()) {
+        rewriter.eraseOp(indexSwitchOp);
+        return true;
+      }
+      
+      auto yieldOp = cast<scf::YieldOp>(selectedRegion.front().getTerminator());
+      SmallVector<Value> yieldValues(yieldOp.getOperands());
+      
+      rewriter.setInsertionPoint(indexSwitchOp);
+      rewriter.inlineBlockBefore(&selectedRegion.front(), indexSwitchOp, yieldValues);
+      rewriter.replaceOp(indexSwitchOp, yieldValues);
+      return true;
+    }
+    
+    return false;
+  }
+
+public:
+  LogicalResult matchAndRewrite(approxMLIR::transformOp transformOp,
+                                PatternRewriter &rewriter) const final {
+    
+    // Check if this is a task skipping transformation
+    if (transformOp.getTransformType() != "task_skipping") {
+      return failure();
+    }
+    
+    int32_t knobValue = transformOp.getKnobVal();
+    Region* parentRegion = transformOp->getParentRegion();
+    
+    if (knobValue == 0) {
+      // Skip entire payload - clear everything except terminator
+      clearRegionPayload(rewriter, parentRegion);
+      rewriter.eraseOp(transformOp);
+      return success();
+    }
+    
+    // For knob_val != 0, find branching operation
+    Operation* branchingOp = findFirstBranchingOp(parentRegion);
+    
+    if (!branchingOp) {
+      // No branching operation found, just remove transformOp
+      rewriter.eraseOp(transformOp);
+      return success();
+    }
+    
+    // Replace branching op with the selected branch
+    // Note: knobValue is 1-indexed, but region indices are 0-indexed
+    unsigned regionIndex = knobValue - 1;
+    replaceBranchingOpWithRegion(rewriter, branchingOp, regionIndex);
+    
+    // Always remove the transformOp
     rewriter.eraseOp(transformOp);
     
     return success();
