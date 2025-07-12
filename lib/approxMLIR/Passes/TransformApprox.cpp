@@ -74,7 +74,7 @@ struct FunctionSubstitution : public OpRewritePattern<approxMLIR::transformOp> {
 
   /**
    * This is the rewrite rule for "approxMLIR.transform"() <{knob_val = 1 : i32,
-   * transform_type = "NNsubstitute"}> : () -> () For each function, we look at
+   * transform_type = "func_substitute"}> : () -> () For each function, we look at
    * the module to find its approximate version (a NN model). Currently the NN
    * model will be named as approx_<original_func_name>. We simply erase the
    * body and inline the body of the approximate function. (The approx function
@@ -95,10 +95,40 @@ struct FunctionSubstitution : public OpRewritePattern<approxMLIR::transformOp> {
     Region *parentRegion = parentFuncOp->getParentRegion();
     func::FuncOp approxFunc = findReplacingFunc(dyn_cast<func::FuncOp>(parentFuncOp), parentRegion);
 
-    assert(approxFunc && "NN4Func transformOp must be replaced by an approx function (not available).");
+    assert(approxFunc && "func_substitute transformOp must be replaced by an approx function (not available).");
     
     // it's assumed that the region that contains transformOp only has one additonal op (which is a call to __internal_<func_name>)
     // your task: change the call __internal_<func_name> to call approx_<func_name>
+    
+    // Find the call operation in the same block as the transformOp
+    Block *block = transformOp->getBlock();
+    func::CallOp callOp = nullptr;
+    
+    // Look for the CallOp in the same block
+    for (Operation &op : block->getOperations()) {
+      if (auto call = dyn_cast<func::CallOp>(&op)) {
+        callOp = call;
+        break;
+      }
+    }
+
+    assert(callOp);
+    
+    // Create a new call to the approximate function with the same arguments
+    rewriter.setInsertionPoint(callOp);
+    auto newCall = rewriter.create<func::CallOp>(
+        callOp.getLoc(), 
+        approxFunc.getSymName(), 
+        callOp.getResultTypes(), 
+        callOp.getOperands()
+    );
+    
+    // Replace all uses of the old call with the new call
+    rewriter.replaceOp(callOp, newCall.getResults());
+    
+    // Remove the transformOp as it's no longer needed
+    rewriter.eraseOp(transformOp);
+    
     return success();
   }
 };
