@@ -150,7 +150,7 @@ struct ConfigureDecisionTree : public OpRewritePattern<approxMLIR::decideOp> {
 
     // Use a default decision value (you might want to handle this differently)
     rewriter.setInsertionPointToStart(defaultBlock);
-    int defaultDecision = decisions.empty() ? 0 : decisions.back();
+    int defaultDecision = decisions.empty() ? 0 : decisions.front();
     rewriter.create<approxMLIR::transformOp>(loc, knobOp.getTransformType(),
                                              defaultDecision);
 

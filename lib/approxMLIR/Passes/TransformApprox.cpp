@@ -100,6 +100,13 @@ struct FunctionSubstitution : public OpRewritePattern<approxMLIR::transformOp> {
     // it's assumed that the region that contains transformOp only has one additonal op (which is a call to __internal_<func_name>)
     // your task: change the call __internal_<func_name> to call approx_<func_name>
     
+    int32_t decisionValue = transformOp.getKnobVal();
+    
+    if(!decisionValue) {
+      rewriter.eraseOp(transformOp);
+      return success();
+    }
+
     // Find the call operation in the same block as the transformOp
     Block *block = transformOp->getBlock();
     func::CallOp callOp = nullptr;
@@ -125,8 +132,7 @@ struct FunctionSubstitution : public OpRewritePattern<approxMLIR::transformOp> {
     
     // Replace all uses of the old call with the new call
     rewriter.replaceOp(callOp, newCall.getResults());
-    
-    // Remove the transformOp as it's no longer needed
+
     rewriter.eraseOp(transformOp);
     
     return success();
