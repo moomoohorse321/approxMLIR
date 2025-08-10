@@ -13,11 +13,11 @@
  * G2: improve the generality of the transformation (e.g. identify the loops recusrively)
  * 
  * Work-items:
- * W1: Add Task Skipping.
- * W2: Improve loop identification
- * W3: Make function substitution fully work INSIDE decision tree branches.
- *  W3.1: Have a pass that convert a function to a call to its body
- *  W3.2: Then the rewrite can be a replacement to the call in each branch.
+ * W1: Add Task Skipping. (done)
+ * W2: Improve loop identification (done)
+ * W3: Make function substitution fully work INSIDE decision tree branches (done)
+ *  W3.1: Have a pass that convert a function to a call to its body (done)
+ *  W3.2: Then the rewrite can be a replacement to the call in each branch. (done)
  */
 #include "PassDetails.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -149,7 +149,7 @@ private:
   scf::ForOp findFirstLoopIn(Region* region) const {
     // walk through to find the first loop
     scf::ForOp firstLoop = nullptr;
-    region->walk([&](scf::ForOp forOp) {
+    region->walk<WalkOrder::PreOrder>([&](scf::ForOp forOp) {
       if (!firstLoop) {
         firstLoop = forOp;
         return WalkResult::interrupt();
