@@ -3,7 +3,7 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr<272>, d
     "approxMLIR.util.annotation.decision_tree"() <{decision_values = array<i32: 0, 1>, decisions = array<i32: 0, 1>, func_name = "base", num_thresholds = 1 : i32, thresholds = array<i32: 2>, thresholds_lowers = array<i32: 0>, thresholds_uppers = array<i32: 4>, transform_type = "task_skipping"}> : () -> ()
   llvm.mlir.global internal constant @str0("Base function result: %d\0A\00") {addr_space = 0 : i32}
   llvm.func @printf(!llvm.ptr, ...) -> i32
-  func.func @base(%arg0: i32, %arg1: i32, %arg2: memref<?xi32>) attributes {llvm.linkage = #llvm.linkage<external>} {
+  func.func @base(%arg0: i32, %arg2: memref<?xi32>, %arg1: i32) attributes {llvm.linkage = #llvm.linkage<external>} {
     %c1 = arith.constant 1 : index
     %c0_i32 = arith.constant 0 : i32
     %0 = arith.index_cast %arg0 : i32 to index
@@ -23,7 +23,7 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr<272>, d
     %alloca = memref.alloca() : memref<1xi32>
     affine.store %c0_i32, %alloca[0] : memref<1xi32>
     %cast = memref.cast %alloca : memref<1xi32> to memref<?xi32>
-    call @base(%c5_i32, %c2_i32, %cast) : (i32, i32, memref<?xi32>) -> ()
+    call @base(%c5_i32, %cast, %c2_i32) : (i32, memref<?xi32>, i32) -> ()
     %0 = llvm.mlir.addressof @str0 : !llvm.ptr
     %1 = llvm.getelementptr %0[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<26 x i8>
     %2 = affine.load %alloca[0] : memref<1xi32>

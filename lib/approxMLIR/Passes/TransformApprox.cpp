@@ -49,7 +49,7 @@ namespace {
 #define GEN_PASS_DEF_TRANSFORMAPPROXPASS
 #include "approxMLIR/Passes/Passes.h.inc"
 
-static void dump_region(Region *region) {
+[[maybe_unused]]  static void dump_region(Region *region) {
   for (Block &block : region->getBlocks())
     block.dump();
 }
@@ -240,18 +240,24 @@ struct TaskSkipping : public OpRewritePattern<approxMLIR::transformOp> {
   using OpRewritePattern<approxMLIR::transformOp>::OpRewritePattern;
 
 private:
-  /**
+   /**
    * Find the first scf.if or scf.index_switch operation in the given region
+   * Uses pre-order traversal to ensure we get the outermost/first branching op
    */
   Operation* findFirstBranchingOp(Region* region) const {
     Operation* branchingOp = nullptr;
-    region->walk([&](Operation* op) {
+    
+    // Pre-order walk ensures we visit operations before their nested regions
+    // This gives us the first (outermost) branching operation
+    region->walk<WalkOrder::PreOrder>([&](Operation* op) {
       if (isa<scf::IfOp>(op) || isa<scf::IndexSwitchOp>(op)) {
         branchingOp = op;
+        // Interrupt immediately when we find the first branching op
         return WalkResult::interrupt();
       }
       return WalkResult::advance();
     });
+    
     return branchingOp;
   }
 
@@ -261,76 +267,134 @@ private:
   void clearRegionPayload(PatternRewriter &rewriter, Region* region) const {
     Block& block = region->front();
     
-    // Collect all non-terminator ops
+    // Collect all non-terminator ops in reverse order
     SmallVector<Operation*> opsToErase;
-    for (Operation& op : block) {
+    for (Operation& op : llvm::reverse(block)) {
       if (!op.hasTrait<OpTrait::IsTerminator>()) {
         opsToErase.push_back(&op);
       }
     }
     
-    // Erase them
+    // Replace all uses with undef values before erasing
+    for (Operation* op : opsToErase) {
+      for (auto result : op->getResults()) {
+        if (!result.use_empty()) {
+          rewriter.setInsertionPoint(op);
+          Value undefValue = rewriter.create<LLVM::UndefOp>(op->getLoc(), result.getType());
+          result.replaceAllUsesWith(undefValue);
+        }
+      }
+    }
+    
+    // Now erase the operations
     for (Operation* op : opsToErase) {
       rewriter.eraseOp(op);
     }
   }
 
   /**
-   * Replace a branching operation with one of its regions
-   * Returns true if replacement was successful, false otherwise
+   * Enumerate all logical branches in a nested if-else structure
+   * Returns regions in the order they would appear in the original if-else chain
    */
-  bool replaceBranchingOpWithRegion(PatternRewriter &rewriter, 
-                                    Operation* branchingOp, 
-                                    unsigned regionIndex) const {
+  void enumerateBranches(Operation* branchingOp, SmallVector<Region*>& branches) const {
     if (auto ifOp = dyn_cast<scf::IfOp>(branchingOp)) {
-      // For scf.if, regionIndex 0 = then, 1 = else
-      if (regionIndex >= ifOp.getNumRegions()) {
-        return false; // Invalid index, preserve everything
+      // Add the "then" branch
+      branches.push_back(&ifOp.getThenRegion());
+      
+      // Check if the "else" region contains another branching op
+      Region& elseRegion = ifOp.getElseRegion();
+      if (!elseRegion.empty()) {
+        Operation* nestedBranching = findFirstBranchingOp(&elseRegion);
+        if (nestedBranching) {
+          // Recursively enumerate nested branches
+          enumerateBranches(nestedBranching, branches);
+        } else {
+          // This is a leaf branch
+          branches.push_back(&elseRegion);
+        }
       }
-      
-      Region& selectedRegion = ifOp.getRegion(regionIndex);
-      if (selectedRegion.empty()) {
-        // No region to inline, just remove the if
-        rewriter.eraseOp(ifOp);
-        return true;
+    } else if (auto switchOp = dyn_cast<scf::IndexSwitchOp>(branchingOp)) {
+      // For index_switch, add all case regions
+      for (auto& caseRegion : switchOp.getCaseRegions()) {
+        branches.push_back(&caseRegion);
       }
-      
-      // Get the yield values from the selected region
-      auto yieldOp = cast<scf::YieldOp>(selectedRegion.front().getTerminator());
-      SmallVector<Value> yieldValues(yieldOp.getOperands());
-      
-      // Inline the selected region
-      rewriter.setInsertionPoint(ifOp);
-      rewriter.inlineBlockBefore(&selectedRegion.front(), ifOp, yieldValues);
-      
-      // Replace if results with yield values
-      rewriter.replaceOp(ifOp, yieldValues);
-      return true;
-      
-    } else if (auto indexSwitchOp = dyn_cast<scf::IndexSwitchOp>(branchingOp)) {
-      // For scf.index_switch, regionIndex corresponds to case index
-      if (regionIndex >= indexSwitchOp.getCaseRegions().size()) {
-        // Index out of bounds, preserve everything
-        return false;
+      // Add default region if it exists and is non-empty
+      if (!switchOp.getDefaultRegion().empty()) {
+        branches.push_back(&switchOp.getDefaultRegion());
       }
-      
-      // Get the selected case region
-      Region& selectedRegion = indexSwitchOp.getCaseRegions()[regionIndex];
-      if (selectedRegion.empty()) {
-        rewriter.eraseOp(indexSwitchOp);
-        return true;
-      }
-      
-      auto yieldOp = cast<scf::YieldOp>(selectedRegion.front().getTerminator());
-      SmallVector<Value> yieldValues(yieldOp.getOperands());
-      
-      rewriter.setInsertionPoint(indexSwitchOp);
-      rewriter.inlineBlockBefore(&selectedRegion.front(), indexSwitchOp, yieldValues);
-      rewriter.replaceOp(indexSwitchOp, yieldValues);
-      return true;
+    }
+  }
+
+  /**
+   * Inline a selected region and remove all branching structure
+   */
+  void inlineSelectedBranch(PatternRewriter &rewriter, 
+                           Operation* rootBranchingOp,
+                           Region* selectedRegion) const {
+    // Handle empty regions
+    if (selectedRegion->empty()) {
+      rewriter.eraseOp(rootBranchingOp);
+      return;
     }
     
-    return false;
+    // Find the terminator to get yielded values
+    Block& block = selectedRegion->front();
+    Operation* terminator = block.getTerminator();
+    
+    IRMapping mapping;
+    rewriter.setInsertionPoint(rootBranchingOp);
+    
+    // Clone all operations except terminator
+    for (auto& op : llvm::make_range(block.begin(), std::prev(block.end()))) {
+      // Skip nested branching ops that we're flattening
+      if (isa<scf::IfOp>(&op) || isa<scf::IndexSwitchOp>(&op)) {
+        // We need to recursively inline the content of the selected branch
+        // This happens when we selected a branch that's inside a nested structure
+        continue;
+      }
+      rewriter.clone(op, mapping);
+    }
+    
+    // Get the yielded values
+    SmallVector<Value> results;
+    if (auto yieldOp = dyn_cast<scf::YieldOp>(terminator)) {
+      for (Value v : yieldOp.getOperands()) {
+        results.push_back(mapping.lookupOrDefault(v));
+      }
+    }
+    
+    rewriter.replaceOp(rootBranchingOp, results);
+  }
+
+  /**
+   * Replace a branching operation with one of its logical branches
+   * This handles nested if-else chains properly
+   */
+  bool replaceWithLogicalBranch(PatternRewriter &rewriter, 
+                                Operation* branchingOp, 
+                                unsigned branchIndex) const {
+    // Enumerate all logical branches
+    SmallVector<Region*> branches;
+    enumerateBranches(branchingOp, branches);
+    
+    // Check if the branch index is valid
+    if (branchIndex >= branches.size()) {
+      return false;
+    }
+    
+    llvm::dbgs() << branches.size() << "\n";
+    for (auto branch: branches) {
+      dump_region(branch);
+      llvm::dbgs() << "------------\n";
+    }
+
+    // Get the selected region
+    Region* selectedRegion = branches[branchIndex];
+    
+    // Inline the selected branch
+    inlineSelectedBranch(rewriter, branchingOp, selectedRegion);
+    
+    return true;
   }
 
 public:
@@ -348,23 +412,22 @@ public:
     if (knobValue == 0) {
       // Skip entire payload - clear everything except terminator
       clearRegionPayload(rewriter, parentRegion);
-      rewriter.eraseOp(transformOp);
       return success();
     }
     
     // For knob_val != 0, find branching operation
     Operation* branchingOp = findFirstBranchingOp(parentRegion);
-    
+
     if (!branchingOp) {
       // No branching operation found, just remove transformOp
       rewriter.eraseOp(transformOp);
       return success();
     }
     
-    // Replace branching op with the selected branch
-    // Note: knobValue is 1-indexed, but region indices are 0-indexed
-    unsigned regionIndex = knobValue - 1;
-    replaceBranchingOpWithRegion(rewriter, branchingOp, regionIndex);
+    // Replace branching op with the selected logical branch
+    // Note: knobValue is 1-indexed, but branch indices are 0-indexed
+    unsigned branchIndex = knobValue - 1;
+    replaceWithLogicalBranch(rewriter, branchingOp, branchIndex);
     
     // Always remove the transformOp
     rewriter.eraseOp(transformOp);
@@ -381,10 +444,10 @@ struct TransformApproxPass
     RewritePatternSet patterns(&getContext());
     patterns.add<FunctionSubstitution>(&getContext());
     patterns.add<LoopPerforation>(&getContext());
+    patterns.add<TaskSkipping>(&getContext());
     GreedyRewriteConfig config;
     config.maxIterations = 1; // to debug
-    (void)(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns)),
-           config); // apply the patterns to the operation
+    (void)(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns),config)); // apply the patterns to the operation
   }
 };
 } // namespace

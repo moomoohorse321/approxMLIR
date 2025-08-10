@@ -31,7 +31,7 @@ namespace {
 #define GEN_PASS_DEF_PREEMITTRANSFORMATIONPASS
 #include "approxMLIR/Passes/Passes.h.inc"
 
-static void dump_region(Region *region) {
+[[maybe_unused]]  static void dump_region(Region *region) {
   for (Block &block : region->getBlocks())
     block.dump();
 }

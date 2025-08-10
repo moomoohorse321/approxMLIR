@@ -192,24 +192,9 @@ def approxMLIR_KnobOp : approxMLIR_Op<"knob">  {
         Implementation Design Choice:
             Choice 1: Have this KnobOp, and internally define how it should be tranformed. Here, knob_val [int] -> (dialect, Op, transformation) 
             Choice 2: Use this Op as a template to define approxOp for each transformation. The output of decision tree (knob [int]) will directly select a transformation. (i.e. knob_val [int] -> transformation)
-        Example:
-
-        ```mlir
-            %state = func.call @get_state(%inputs) : (...) -> (f32)
-            approx.knob %args, %state, %rf, %QoS_in, %QoS_out : i32[], i32, i32, i32, i32 {
-                approxMLIR.decide %state, %num_thresholds, %thresholds, %decisions : i32, i32, i32[], i32[] {
-                    // some kernels
-                }
-                approxMLIR.checker %state : i32 {
-                    // 2 kernels
-                }
-                // Define the internal Op here
-                %internal_op = approxMLIR.for ...
-            }
-        ```
     }];
 
-    let arguments = (ins AnyType:$state, I32Attr:$id, I32Attr:$rf, DenseI32ArrayAttr:$QoS_in, DenseI32ArrayAttr:$QoS_out, Variadic<AnyType>:$args, SymbolNameAttr: $transform_type); //  state, rf, QoS_in, QoS_out, args
+    let arguments = (ins AnyType:$state, I32Attr:$id, I32Attr:$rf, DenseI32ArrayAttr:$QoS_in, DenseI32ArrayAttr:$QoS_out, Variadic<AnyType>:$args, SymbolNameAttr: $transform_type);
     let results = (outs Variadic<AnyType>:$results);
     let regions = (region AnyRegion:$body);
 

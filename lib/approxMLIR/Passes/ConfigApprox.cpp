@@ -29,7 +29,7 @@ namespace {
 #define GEN_PASS_DEF_CONFIGAPPROXPASS
 #include "approxMLIR/Passes/Passes.h.inc"
 
-static void dump_region(Region *region) {
+[[maybe_unused]] static void dump_region(Region *region) {
   for (Block &block : region->getBlocks())
     block.dump();
 }
@@ -178,8 +178,7 @@ struct ConfigApproxPass : public impl::ConfigApproxPassBase<ConfigApproxPass> {
     patterns.add<FinalizeDecisionTree>(&getContext());
     GreedyRewriteConfig config;
     config.maxIterations = 1; // to debug
-    (void)(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns)),
-           config); // apply the patterns to the operation
+    (void)(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns),config)); // apply the patterns to the operation
   }
 };
 } // namespace
