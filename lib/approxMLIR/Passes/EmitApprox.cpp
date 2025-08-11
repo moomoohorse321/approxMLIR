@@ -19,6 +19,7 @@
 #include <memory>
 // set
 #include <set>
+#include <queue>
 
 using namespace mlir;
 using namespace approxMLIR;
