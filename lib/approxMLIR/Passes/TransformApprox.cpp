@@ -381,12 +381,6 @@ private:
     if (branchIndex >= branches.size()) {
       return false;
     }
-    
-    llvm::dbgs() << branches.size() << "\n";
-    for (auto branch: branches) {
-      dump_region(branch);
-      llvm::dbgs() << "------------\n";
-    }
 
     // Get the selected region
     Region* selectedRegion = branches[branchIndex];
