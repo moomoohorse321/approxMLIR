@@ -171,6 +171,12 @@ private:
     // Get the entry block and cloned block
     Block& entryBlock = newLoop.getRegion().front();
     Block& clonedBlock = *std::next(newLoop.getRegion().begin());
+
+    // Remove the default terminator from the entry block
+    // (it was created automatically when the ForOp was created)
+    if (!entryBlock.empty() && entryBlock.back().mightHaveTrait<OpTrait::IsTerminator>()) {
+      rewriter.eraseOp(&entryBlock.back());
+    }
     
     // Collect the entry block arguments to use as replacements
     SmallVector<Value> entryArgs;
@@ -230,7 +236,7 @@ public:
     
     rewriter.replaceOp(targetLoop, newLoop);
     
-    rewriter.eraseOp(transformOp);
+    rewriter.eraseOp(transformOp);    
     
     return success();
   }
