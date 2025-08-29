@@ -78,7 +78,6 @@ list(APPEND CMAKE_MODULE_PATH "${APPROX_SOURCE_DIR}/cmake/modules")
 include(sanitizers)
 
 
-add_subdirectory(external-dialects/stablehlo)
 
 add_subdirectory(include)
 add_subdirectory(lib)

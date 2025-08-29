@@ -9,11 +9,11 @@ set(LIBS
         MLIRapproxMLIR
         MLIRApproxMLIRTransforms
         
-        StablehloRegister
-        StablehloTestUtils
-        StablehloPasses
-        InterpreterOps
-        StablehloTOSATransforms
+#        StablehloRegister
+#        StablehloTestUtils
+#        StablehloPasses
+#        InterpreterOps
+#        StablehloTOSATransforms
 )
 add_llvm_executable(approxMLIR-opt approxMLIR-opt.cpp)
 
