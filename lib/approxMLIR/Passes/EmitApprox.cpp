@@ -145,6 +145,39 @@ struct EmitErrorKnobs
     }
     return state;
   }
+
+  /// Collect symbol values used by affine ops in `region` and their defining ops
+  /// (only when the defining op lives inside `region`). Results are deduped and
+  /// kept in stable order so symVals[i] corresponds to producers[i].
+  static void collectAffineSymbolProducersInRegion(
+    Region &region,
+    SmallVector<Operation *> &producers /*OUT*/) {
+
+    DenseSet<Operation *> seen;
+
+    auto recordSymbols = [&](AffineMap map, ValueRange mapOps) {
+      const unsigned D = map.getNumDims();
+      if (map.getNumSymbols() == 0) return;
+      for (Value s : mapOps.drop_front(D)) {
+        if (Operation *def = s.getDefiningOp()) {
+          // Only hoist trivial/pure things you know are safe; index_cast is common.
+          if (def->getParentRegion() == &region && isa<arith::IndexCastOp>(def)) {
+            if (seen.insert(def).second) producers.push_back(def);
+          }
+        }
+      }
+    };
+
+    region.walk([&](Operation *op) {
+      if (auto load = dyn_cast<affine::AffineLoadOp>(op))
+        recordSymbols(load.getAffineMap(), load.getMapOperands());
+      else if (auto store = dyn_cast<affine::AffineStoreOp>(op))
+        recordSymbols(store.getAffineMap(), store.getMapOperands());
+      // Add affine.apply/min/max here if you use them.
+    });
+  }
+
+
   
   // Helper function to erase a region (copied from PreEmitFuncConversion)
   static void eraseRegion(Region *region, PatternRewriter &rewriter) {
@@ -282,6 +315,18 @@ struct EmitErrorKnobs
 
     // Remove the annotation operation
     rewriter.eraseOp(annotationOp);
+
+    // hoist symbols (used by affine ops) out of the knob since symbols must be in affine region.
+    {
+      SmallVector<Operation *> symProducersInKnob;
+      collectAffineSymbolProducersInRegion(knobRegion, symProducersInKnob);
+
+      // Hoist them out right before the knob. Knob is not IsolatedFromAbove,
+      // so the region will just capture these defs.
+      rewriter.setInsertionPoint(knobOp);
+      for (Operation *def : symProducersInKnob)
+        def->moveBefore(knobOp);
+    }
     
     return success();
   }

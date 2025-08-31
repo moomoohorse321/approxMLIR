@@ -2,7 +2,7 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> :
   
   "approxMLIR.util.annotation.decision_tree"() <{decision_values = array<i32: 0, 1>, decisions = array<i32: 0, 1>, func_name = "base", num_thresholds = 1 : i32, thresholds = array<i32: 2>, thresholds_lowers = array<i32: 0>, thresholds_uppers = array<i32: 4>, transform_type = "func_substitute"}> : () -> ()
 
-  "approxMLIR.util.annoatation.convert_to_call"() <{func_name = "base"}> : () -> ()
+  "approxMLIR.util.annotation.convert_to_call"() <{func_name = "base"}> : () -> ()
 
   llvm.mlir.global internal constant @str0("Base function result: %d\0A\00") {addr_space = 0 : i32}
   llvm.func @printf(!llvm.ptr, ...) -> i32
