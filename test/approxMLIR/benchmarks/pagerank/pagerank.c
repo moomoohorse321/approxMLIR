@@ -1,7 +1,6 @@
-// pagerank.c — pure C, pthreads, robust CLI, CSR graph
-// Build: gcc -O3 -std=c11 -pthread pagerank.c -o pagerank
+// RUN: cgeist -O0 %stdinclude %s -S > %s.mlir
+// RUN: cgeist -O0 %stdinclude %s -o -lm %s.exec
 
-#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -259,7 +258,9 @@ static void usage(const char *prog) {
 
 int main(int argc, char **argv) {
     // Defaults
-    char mode[16] = "synthetic";
+    char mode[16];
+    mode[0] = '\0';
+    strncpy(mode, "synthetic", sizeof(mode) - 1);
     char *filepath = NULL;
     int P = 1;
     int N = 10000;
