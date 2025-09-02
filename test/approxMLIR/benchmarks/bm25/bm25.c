@@ -1,10 +1,11 @@
-// RUN: cgeist %stdinclude %s -S > %s.mlir 
+// RUN: cgeist -O0 %stdinclude %s -S > %s.mlir 
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include <ctype.h> // For tolower
+#include <time.h> 
 
 
 // --- BM25 Parameters ---
@@ -21,16 +22,6 @@ typedef struct {
 // Simple token comparison (case-insensitive)
 int compare_tokens(const char *t1, const char *t2) {
     return strcasecmp(t1, t2); // strcasecmp is POSIX; use _stricmp on Windows
-    /* // Manual implementation if strcasecmp isn't available:
-    while (*t1 && *t2) {
-        if (tolower((unsigned char)*t1) != tolower((unsigned char)*t2)) {
-            return tolower((unsigned char)*t1) - tolower((unsigned char)*t2);
-        }
-        t1++;
-        t2++;
-    }
-    return tolower((unsigned char)*t1) - tolower((unsigned char)*t2);
-    */
 }
 
 // --- Simple Tokenizer & Word Counter ---
@@ -83,7 +74,7 @@ int calculate_tf(const char *term, const char *doc_lower) {
 // --- Document Frequency (DF) Calculation ---
 // Counts how many documents in the corpus contain the term (case-insensitive).
 // Modifies document copies by converting to lowercase.
-int calculate_df(const char *term, const char **corpus, int num_docs) {
+int calculate_df(const char *term, char **corpus, int num_docs) {
     if (term == NULL || corpus == NULL) return 0;
 
     int count = 0;
@@ -145,7 +136,7 @@ int compare_scores(const void *a, const void *b) {
 }
 
 // --- Main BM25 Ranking Function ---
-DocumentScore* rank_documents_bm25(const char *query, const char **corpus, int num_docs) {
+DocumentScore* rank_documents_bm25(char *query, char **corpus, int num_docs) {
     if (query == NULL || corpus == NULL || num_docs <= 0) {
         return NULL;
     }
@@ -282,25 +273,116 @@ DocumentScore* rank_documents_bm25(const char *query, const char **corpus, int n
     return scores;
 }
 
-// --- Main Function (Example Usage) ---
-int main() {
-    // Sample Corpus (array of strings)
-    const char *corpus[] = {
-        "The quick brown fox jumps over the lazy dog",
-        "The lazy dog sat on the mat",
-        "Brown foxes are quick",
-        "Exploring the world of information retrieval and search engines",
-        "BM25 is a ranking function used by search engines",
-        "Quick brown dogs jump over lazy foxes"
-    };
-    int num_docs = sizeof(corpus) / sizeof(corpus[0]);
+char **generate_corpus(int num_docs, unsigned int seed, int min_words, int max_words) {
+    if (num_docs <= 0 || min_words <= 0 || max_words < min_words) return NULL;
 
-    const char *query = "quick brown fox";
+    static const char *vocab[] = {
+        "the","quick","brown","fox","jumps","over","lazy","dog",
+        "search","engine","retrieval","ranking","bm25","information",
+        "system","text","document","query","model","term","frequency",
+        "inverse","document","probabilistic","score","token","index",
+        "vector","space","tfidf","normalize","length","field","weight",
+        "analysis","embedding","graph","random","walk","pagerank","quality",
+        "relevance","language","modeling","approximate","distance","measure"
+    };
+    const int V = (int)(sizeof(vocab)/sizeof(vocab[0]));
+
+    srand(seed);
+
+    char **corpus = (char**)malloc((size_t)num_docs * sizeof(char*));
+    if (!corpus) return NULL;
+
+    for (int i = 0; i < num_docs; ++i) {
+        int words = min_words + (rand() % (max_words - min_words + 1));
+
+        /* conservative buffer: (max 10 chars per word + 1 space) * words + period + NUL */
+        size_t cap = (size_t)words * 12 + 2;
+        char *buf = (char*)malloc(cap);
+        if (!buf) {
+            for (int j = 0; j < i; ++j) free(corpus[j]);
+            free(corpus);
+            return NULL;
+        }
+
+        size_t len = 0;
+        for (int w = 0; w < words; ++w) {
+            const char *word = vocab[rand() % V];
+            int wrote = 0;
+            if (w == 0) {
+                wrote = snprintf(buf + len, cap - len, "%s", word);
+            } else {
+                wrote = snprintf(buf + len, cap - len, " %s", word);
+            }
+            if (wrote < 0) { wrote = 0; } /* guard */
+            len += (size_t)wrote;
+            if (len >= cap) { len = cap - 1; break; }
+        }
+
+        /* add trailing period if space remains */
+        if (len + 1 < cap) {
+            buf[len++] = '.';
+            buf[len] = '\0';
+        } else {
+            buf[cap - 1] = '\0';
+        }
+
+        corpus[i] = buf;
+    }
+
+    return corpus;
+}
+
+void free_corpus(char **corpus, int num_docs) {
+    if (!corpus) return;
+    for (int i = 0; i < num_docs; ++i) free(corpus[i]);
+    free(corpus);
+}
+
+// --- Main Function (Example Usage) ---
+
+static void usage(const char* prog) {
+    fprintf(stderr, "Usage: %s <num_docs> [seed] [\"query string\"]\n", prog);
+    fprintf(stderr, "  num_docs     : number of documents to generate (default 6)\n");
+    fprintf(stderr, "  seed         : RNG seed (default 42)\n");
+    fprintf(stderr, "  query string : BM25 query (default \"quick brown fox\")\n");
+}
+
+/// ./bm25 6 42 "quick brown fox" (<num doc> <seed> <query>)
+int main(int argc, char **argv) {
+    int num_docs = 6;
+    unsigned int seed = 42;
+    char *query; // = "quick brown fox";
+
+    if (argc >= 2) {
+        num_docs = atoi(argv[1]);
+        if (num_docs <= 0) {
+            fprintf(stderr, "num_docs must be positive.\n");
+            usage(argv[0]);
+            return 1;
+        }
+    }
+    if (argc >= 3) {
+        seed = (unsigned int)strtoul(argv[2], NULL, 10);
+    }
+    if (argc >= 4) {
+        query = argv[3];
+    }
+
+    // int num_docs = sizeof(corpus) / sizeof(corpus[0]);
 
     printf("Query: \"%s\"\n\n", query);
     printf("Ranking documents:\n");
 
+    char **corpus = generate_corpus(num_docs, seed, 6, 16);
+    if (!corpus) { fprintf(stderr, "generate_corpus failed\n"); return 1; }
+
+    struct timespec start, end;
+    clock_gettime(CLOCK_MONOTONIC, &start);
     DocumentScore *ranked_scores = rank_documents_bm25(query, corpus, num_docs);
+
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    double elapsed_ms = (end.tv_sec - start.tv_sec) * 1000.0 +
+                        (end.tv_nsec - start.tv_nsec) / 1.0e6;
 
     if (ranked_scores) {
         for (int i = 0; i < num_docs; ++i) {
@@ -315,6 +397,8 @@ int main() {
     } else {
         printf("An error occurred during ranking.\n");
     }
+
+    printf("\nComputation time: %.3f ms\n", elapsed_ms);
 
     return 0;
 }
