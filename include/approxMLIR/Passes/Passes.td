@@ -4,20 +4,33 @@
 include "mlir/Pass/PassBase.td"
 include "mlir/Rewrite/PassUtil.td"
 
-def EmitApproxPass : Pass<"emit-approx", "ModuleOp"> {
+def PreEmitTransformationPass : Pass<"pre-emit-transform"> {
+  let summary = "Transform the pre-emit MLIR";
+  let constructor = "mlir::approxMLIR::createPreEmitTransformationPass()";
+  let dependentDialects = ["func::FuncDialect", "approxMLIR::approxMLIRDialect"];
+}
+
+def EmitApproxPass : Pass<"emit-approx"> {
   let summary = "Emit Aproxmiate For Op Pass (Annotation is implemented by Func Dialect's Ops)";
   let constructor = "mlir::approxMLIR::createEmitApproxPass()";
   let dependentDialects = [
-   "mlir::func::FuncDialect", 
+   "mlir::func::FuncDialect",  "scf::SCFDialect",
    "mlir::approxMLIR::approxMLIRDialect"];
 }
 
-def ConfigApproxPass : Pass<"config-approx", "ModuleOp"> {
+def ConfigApproxPass : Pass<"config-approx"> {
   let summary = "Lower the configured MLIR";
   let constructor = "mlir::approxMLIR::createConfigApproxPass()";
   let dependentDialects = [
    "mlir::func::FuncDialect", 
    "mlir::approxMLIR::approxMLIRDialect"];
+}
+
+def TransformApproxPass : Pass<"transform-approx"> {
+  let summary = "Lower the configured MLIR";
+  let constructor = "mlir::approxMLIR::createTransformApproxPass()";
+  let dependentDialects = ["func::FuncDialect", "scf::SCFDialect",
+    "approxMLIR::approxMLIRDialect"];
 }
 
 

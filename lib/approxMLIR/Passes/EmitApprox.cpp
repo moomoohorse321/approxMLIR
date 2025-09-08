@@ -19,311 +19,338 @@
 #include <memory>
 // set
 #include <set>
+#include <queue>
+
+using namespace mlir;
+using namespace approxMLIR;
 
 namespace mlir {
-    using namespace approxMLIR;
-    namespace {
-    #define GEN_PASS_DEF_EMITAPPROXPASS
-    #include "approxMLIR/Passes/Passes.h.inc"
-    /**
-     * https://mlir.llvm.org/docs/Tutorials/UnderstandingTheIRStructure/
-     */
-    static void track_producers(Operation &op, std::vector<std::pair<Type, Location>> &producers, std::vector<Value> &producerVals) {
-        for (Value operand : op.getOperands()) {
-            bool found = false;
-            // deduplicate the producer values
-            for(auto _producerVal: producerVals) {
-                if(_producerVal == operand) {
-                    found = true;
-                    break;
-                }
-            }
-            
-            if(found) {
-                continue;
-            }
-            
-            producerVals.push_back(operand);
-            if (Operation *producer = operand.getDefiningOp()) {
-                // producer->dump();
-                producers.push_back(std::make_pair(operand.getType(), producer->getLoc()));
-            } else {
-                // If there is no defining op, the Value is necessarily a Block
-                // argument.
-                auto blockArg = operand.cast<BlockArgument>();
-                producers.push_back(std::make_pair(blockArg.getType(), blockArg.getLoc()));
-            }
-        }
-    }
-    
-    static void track_users(Operation &op, std::vector<Operation*> &users, std::vector<Value> &results) {
-        for (auto indexedResult : llvm::enumerate(op.getResults())) {
-            Value result = indexedResult.value();
-            results.push_back(result);
-            // for (Operation *userOp : result.getUsers()) {
-            //     userOp->dump();
-            // }
-        }
-    }
-    
-    static void generate_approx_outs(std::vector<Operation*> inRegionOps, std::vector<Operation*> &users, std::vector<Value> &results, std::vector<Type> &resultTypes) {
-        std::vector<Value> _results;
-        // llvm::dbgs() << "generate_approx_outs\n";
-        for(auto result : results) {
-            // llvm::dbgs() << "result: ";
-            // result.dump();
-            bool usedOutsideRegion = false;
-            if(result.use_empty()) {
-                continue;
-            }
-            for (Operation *userOp : result.getUsers()) {
-                for(auto inRegionOp : inRegionOps) {
-                    if(userOp == inRegionOp) {
-                        usedOutsideRegion = false;
-                        break;
-                    }
-                }
-                if(usedOutsideRegion) {
-                    break;
-                }
-            }
-            if(usedOutsideRegion) {
-                _results.push_back(result);
-            }
-        }
+using namespace approxMLIR;
+namespace {
+#define GEN_PASS_DEF_EMITAPPROXPASS
+#include "approxMLIR/Passes/Passes.h.inc"
+/**
+ * https://mlir.llvm.org/docs/Tutorials/UnderstandingTheIRStructure/
+ */
+[[maybe_unused]] static void trackProducers(Operation &op, std::vector<Value> &producerVals) {
+  for (Value operand : op.getOperands()) {
+    bool found = false;
+    // deduplicate the producer values
+    for (auto _producerVal : producerVals)
+      if (_producerVal == operand) {
+        found = true;
+        break;
+      }
 
-        // llvm::dbgs() << _results.size() << " results\n";
+    if (found)
+      continue;
+
+    producerVals.push_back(operand);
+  }
+}
+
+/// @brief  O(N) where N = # Ops in the marked region
+[[maybe_unused]] static bool isInRegion(std::vector<Operation *> &opsInRegion, Operation *op) {
+  for (auto *regionOp : opsInRegion) {
+    // Check if it's the operation itself
+    if (regionOp == op)
+      return true;
+    
+    // Check if op is nested within regionOp
+    if (regionOp->isAncestor(op))
+      return true;
+    // regionOp->dump();
+  }
+  return false;
+}
+
+[[maybe_unused]] static bool isInRegion(std::vector<Operation *> &opsInRegion, BlockArgument arg) {
+  Block *argBlock = arg.getOwner();
+  
+  for (auto *regionOp : opsInRegion) {
+    // Check if the argument's block is within this operation
+    for (Region &region : regionOp->getRegions()) {
+      for (Block &block : region) {
+        if (&block == argBlock)
+          return true;
+      }
+    }
+    
+    // Check if the argument's block is in a nested operation
+    if (argBlock->getParentOp() && regionOp->isAncestor(argBlock->getParentOp()))
+      return true;
+  }
+  return false;
+}
+
+[[maybe_unused]] static void dump_region(Region *region) {
+  for (Block &block : region->getBlocks()) 
+    block.dump();
+}
+
+
+[[maybe_unused]] static void findAllDefs(std::vector<Operation *> &opsInRegion, Region *region,
+                          std::vector<Value> &producerVals) {
+  for (auto *op : opsInRegion) 
+    trackProducers(*op, producerVals);
+
+  std::vector<Value> toRemove;
+  for (auto operand : producerVals) {
+    Operation *definingOp = operand.getDefiningOp();
+    // def is an op
+    if(definingOp && isInRegion(opsInRegion, definingOp)) 
+      toRemove.push_back(operand);
+    // block arg
+    if(!definingOp && isInRegion(opsInRegion, cast<BlockArgument>(operand))) 
+      toRemove.push_back(operand);
+  }
+  for(auto operand: toRemove)  
+    producerVals.erase(std::remove(producerVals.begin(), producerVals.end(), operand), producerVals.end());
+  
+  // for(auto operand: producerVals) operand.dump();
+}
+
+[[maybe_unused]] static void findAllUses(Region *region, std::vector<Operation *> &opsInRegion,
+                        std::vector<Value>& results, std::vector<Type> &resultTypes) {
+  for(auto op: opsInRegion) {
+    for (auto indexedResult : llvm::enumerate(op->getResults())) {
+      Value result = indexedResult.value();
+      for (Operation *userOp : result.getUsers()) {
+        if(!isInRegion(opsInRegion, userOp)) {
+          // result.dump();
+          results.push_back(result);
+          resultTypes.push_back(result.getType());
+          break;
+        }
+      }
+    }
+  }
+}
+struct EmitErrorKnobs
+    : public OpRewritePattern<approxMLIR::utilAnnotationDecisionTreeOp> {
+  using OpRewritePattern<
+      approxMLIR::utilAnnotationDecisionTreeOp>::OpRewritePattern;
+      
+  BlockArgument getState(func::FuncOp funcOp) const {
+    if (funcOp.getFunctionType().getNumInputs() == 0) {
+      return nullptr;
+    }
+    Block &block = funcOp.getBody().front();
+    BlockArgument state = block.getArguments().back();
+    // Check if the state is of the expected type (e.g., i32)
+    if (!state.getType().isa<IntegerType>()) {
+      funcOp.emitError(
+          "Expected the last argument to be of type i32 for state.");
+      return nullptr;
+    }
+    return state;
+  }
+
+  /// Collect symbol values used by affine ops in `region` and their defining ops
+  /// (only when the defining op lives inside `region`). Results are deduped and
+  /// kept in stable order so symVals[i] corresponds to producers[i].
+  static void collectAffineSymbolProducersInRegion(
+    Region &region,
+    SmallVector<Operation *> &producers /*OUT*/) {
+
+    DenseSet<Operation *> seen;
+
+    auto recordSymbols = [&](AffineMap map, ValueRange mapOps) {
+      const unsigned D = map.getNumDims();
+      if (map.getNumSymbols() == 0) return;
+      for (Value s : mapOps.drop_front(D)) {
+        if (Operation *def = s.getDefiningOp()) {
+          // Only hoist trivial/pure things you know are safe; index_cast is common.
+          if (def->getParentRegion() == &region && isa<arith::IndexCastOp>(def)) {
+            if (seen.insert(def).second) producers.push_back(def);
+          }
+        }
+      }
+    };
+
+    region.walk([&](Operation *op) {
+      if (auto load = dyn_cast<affine::AffineLoadOp>(op))
+        recordSymbols(load.getAffineMap(), load.getMapOperands());
+      else if (auto store = dyn_cast<affine::AffineStoreOp>(op))
+        recordSymbols(store.getAffineMap(), store.getMapOperands());
+      // Add affine.apply/min/max here if you use them.
+    });
+  }
+
+
+  
+  // Helper function to erase a region (copied from PreEmitFuncConversion)
+  static void eraseRegion(Region *region, PatternRewriter &rewriter) {
+    std::queue<Block *> blocksToErase;
+    auto try_delete_block = [&](Block *block) {
+      // the make_early_inc_range is used to ensure that we can safely erase ops
+      for (auto &op : llvm::make_early_inc_range(llvm::reverse(*block))) {
+        // for an op to be deleted, all its uses must be deleted.
+        if (!op.use_empty()) {
+          // failed, there are some ops that has uses outside the block.
+          return false;
+        } else {
+          rewriter.eraseOp(&op);
+        }
+      }
+      return true;
+    };
+    // Note: you must first put it in a list, otherwise you will damage iterator
+    for (Block &block : llvm::reverse(region->getBlocks())) 
+      blocksToErase.push(&block);
+
+    // when we dequee, we reset.
+    // Otherwise we decrement. Once it's zero, it means an infinite loop.
+    int errCounter = blocksToErase.size();
+
+    while (!blocksToErase.empty()) {
+      Block *block = blocksToErase.front();
+      blocksToErase.pop();
+      if (try_delete_block(block)) {
+        rewriter.eraseBlock(block);
+        errCounter = blocksToErase.size();
+      } else {
+        blocksToErase.push(block);
+        errCounter--;
+      }
+      assert ((blocksToErase.empty() || errCounter > 0) && "Error: Infinite loop detected while erasing blocks.");
+    }
+  }
+  
+  LogicalResult
+  matchAndRewrite(approxMLIR::utilAnnotationDecisionTreeOp annotationOp,
+                  PatternRewriter &rewriter) const final {
+    ModuleOp moduleOp = annotationOp->getParentOfType<mlir::ModuleOp>();
+    StringRef funcName = annotationOp.getFuncName();
+    auto funcOp = moduleOp.lookupSymbol<func::FuncOp>(funcName);
+    if (!funcOp) {
+      return annotationOp.emitOpError("Function with name '")
+             << funcName << "' not found.";
+    }
+    
+    // Get the state argument
+    BlockArgument state = getState(funcOp);
+    if (!state) {
+      return failure();
+    }
+
+    // Create a new decision tree operation at the beginning of the function
+    rewriter.setInsertionPointToStart(&funcOp.getBody().front());
+    rewriter.create<approxMLIR::decideOp>(
+      funcOp.getLoc(), std::nullopt, state,
+      annotationOp.getNumThresholds(), annotationOp.getThresholdsUppers(),
+      annotationOp.getThresholdsLowers(), annotationOp.getDecisionValues(),
+      annotationOp.getThresholds(), annotationOp.getDecisions(), 
+      annotationOp.getTransformType());
+      
+    
+    // Clone the original function body to move into knob
+    Region &funcBody = funcOp.getBody();
+    Region clonedRegion;
+    rewriter.cloneRegionBefore(funcBody, clonedRegion, clonedRegion.end());
+
+    // Clear the original function body first
+    eraseRegion(&funcBody, rewriter);
+    
+    // Create a new entry block for the function
+    SmallVector<Location> argLocs(funcOp.getFunctionType().getNumInputs(), 
+                                   funcOp.getLoc());
+    Block *newFuncBlock = rewriter.createBlock(&funcBody, funcBody.end(),
+                                                funcOp.getFunctionType().getInputs(), 
+                                                argLocs);
+    
+    // Set insertion point inside the new block
+    rewriter.setInsertionPointToStart(newFuncBlock);
+    
+    // Get function arguments to pass to the knob
+    SmallVector<Value> knobArgs;
+    for (BlockArgument arg : newFuncBlock->getArguments()) {
+      knobArgs.push_back(arg);
+    }
+    
+    // Create the KnobOp with the function's return types
+    auto knobOp = rewriter.create<approxMLIR::KnobOp>(
+      funcOp.getLoc(), 
+      funcOp.getFunctionType().getResults(),
+      newFuncBlock->getArguments().back(),    // state from NEW block
+      0,
+      0,
+      rewriter.getDenseI32ArrayAttr({}),
+      rewriter.getDenseI32ArrayAttr({}),
+      knobArgs,
+      annotationOp.getTransformType()
+    );
         
-        results.clear();
-        for(auto result : _results) {
-            results.push_back(result);
-            resultTypes.push_back(result.getType());
-        }
-    } 
-    
-    static void dump_region(Region* region) {
-        for (Block &block : region->getBlocks()) {
-            block.dump();
-        }
+    // Move the cloned region into the knob
+    Region &knobRegion = knobOp.getBody();
+    rewriter.inlineRegionBefore(clonedRegion, knobRegion, knobRegion.end());
+
+    // Replace all uses of block arguments with the corresponding knob operands
+    Block &entryBlock = knobRegion.front();
+    for (auto [blockArg, knobOperand] : llvm::zip(entryBlock.getArguments(), knobArgs)) {
+      rewriter.replaceAllUsesWith(blockArg, knobOperand);
     }
-    static Operation* moveMarkedOpsToNewBlock(Operation* op, PatternRewriter &rewriter) {
-        Operation* clonedOp = rewriter.clone(*op);
-        for(auto result: llvm::enumerate(op->getResults())) {
-            auto oldResult = op->getResult(result.index());
-            auto newResult = clonedOp->getResult(result.index());
-            rewriter.replaceAllUsesWith(oldResult, newResult);
-        }
-        rewriter.eraseOp(op);
-        return clonedOp;
-    }
+    entryBlock.eraseArguments(0, entryBlock.getNumArguments());
     
-    struct AnnocationOpConversion : public OpRewritePattern<func::CallOp> 
+    // Replace return with yield in the knob region
+    for (Block &knobBlock : knobRegion) {
+      for (auto &op : llvm::make_early_inc_range(knobBlock)) {
+        if (auto returnOp = dyn_cast<func::ReturnOp>(op)) {
+          rewriter.setInsertionPoint(&op);
+          rewriter.create<approxMLIR::yieldOp>(
+              returnOp.getLoc(), returnOp.getOperands());
+          rewriter.eraseOp(returnOp);
+        }
+      }
+    }
+
+    rewriter.setInsertionPointToEnd(newFuncBlock);
+
+    // Create the return with knob results
+    if (funcOp.getFunctionType().getNumResults() > 0) {
+      rewriter.create<func::ReturnOp>(funcOp.getLoc(), knobOp.getResults());
+    } else {
+      rewriter.create<func::ReturnOp>(funcOp.getLoc());
+    }
+
+    // Remove the annotation operation
+    rewriter.eraseOp(annotationOp);
+
+    // hoist symbols (used by affine ops) out of the knob since symbols must be in affine region.
     {
-        using OpRewritePattern<func::CallOp>::OpRewritePattern;
-        
-        /**
-         * For each function, we scan through it, finding annotations that mark the region to insert in our knobOp (in this case, approxForOp).
-         */
-        LogicalResult
-        matchAndRewrite(func::CallOp callOp,
-            PatternRewriter &rewriter) const final {
-            std::vector<Operation*> opsToMove;
-            std::vector<std::pair<Type, Location>> producers;
-            std::vector<Value> producerVals;
-            std::vector<Operation*> users;
-            std::vector<Value> results;
-            std::vector<Type> resultTypes;
-            
-            Operation* start_knob = nullptr;
-            Operation* end_knob = nullptr;
-            Operation* decision_tree = nullptr;
-            
+      SmallVector<Operation *> symProducersInKnob;
+      collectAffineSymbolProducersInRegion(knobRegion, symProducersInKnob);
 
-            // decision tree arguments
-            Value state;
-            int num_thresholds;
-            std::vector<int> thresholds_uppers = {4};
-            std::vector<int> thresholds_lowers = {0};
-            std::vector<int> decision_values = {0, 1};
-            std::vector<int> thresholds = {2};
-            std::vector<int> decisions = {0, 1};
+      // Hoist them out right before the knob. Knob is not IsolatedFromAbove,
+      // so the region will just capture these defs.
+      rewriter.setInsertionPoint(knobOp);
+      for (Operation *def : symProducersInKnob)
+        def->moveBefore(knobOp);
+    }
+    
+    return success();
+  }
+};
 
-            bool in_knob = false;
-            Region* region = nullptr;
-            
-            
-            StringRef callee = callOp.getCallee();
-            
-            // We only look at the start and get the parent region.
-            if(callee.compare(StringRef("knob_start")) != 0) {
-                // llvm::dbgs() << "not knob_start\n";
-                return failure();
-            }
-            
-            auto savedInsertPoint = rewriter.saveInsertionPoint();
-            
-            
-            region = callOp->getParentRegion();
-            
+struct EmitApproxPass : public impl::EmitApproxPassBase<EmitApproxPass> {
+  using EmitApproxPassBase::EmitApproxPassBase;
 
-            /**
-             * Step 1: Lower decision tree
-             */
-            llvm::dbgs() << "lowering decision tree\n";
-            for (Block &block : region->getBlocks()) {
-                for (Operation &op : block.getOperations()) {
-                    if(dyn_cast<func::CallOp>(op) && dyn_cast<func::CallOp>(op).getCallee().compare(StringRef("decision_tree")) == 0) {
-                        auto callOp = dyn_cast<func::CallOp>(op);
-                        // parse the inputs
-                        state = callOp.getOperand(0);
-                        
-                        rewriter.setInsertionPoint(&op);
-                        rewriter.replaceOpWithNewOp<approxMLIR::decideOp>(callOp, std::nullopt,
-                            state, num_thresholds, thresholds_uppers, thresholds_lowers, decision_values, thresholds, decisions);
-                        decision_tree = &op;
-                        break; // otherwise the iteration will fail because Op has been replaced
-                    }
-                }
-            }
-            // todo: insert the checkerOp
+  void runOnOperation() override {
+    ConversionTarget target(getContext());
 
-        
-            // Step 2: mark the ops to move (we only look at the first knob_start and knob_end)
-            for (Block &block : region->getBlocks()) {
-                for (Operation &op : block.getOperations()) {
-                    
-                    // check if hit the user annotation "func.call @knob_start() : () -> ()"
-                    
-                    auto _callOp = dyn_cast<func::CallOp>(op);
+    target.addIllegalOp<approxMLIR::utilAnnotationDecisionTreeOp>();
 
-                    
-                    if(in_knob && &op != decision_tree) {
-                        opsToMove.push_back(&op);
-                    }
+    target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
 
-                    if (_callOp && _callOp.getLoc() == callOp.getLoc()) {
-                        in_knob = true;
-                        start_knob = &op; // we will later replace this will the approxOp
-                    }
-
-                    if (_callOp && _callOp.getCallee().compare(StringRef("knob_end")) == 0) {
-                        in_knob = false;
-                        end_knob = &op; // we will later replace this with the yield Op
-                    }
-                }
-            }
-
-            
-            if(start_knob == nullptr || end_knob == nullptr) {
-                return failure();
-            }
-            // step 3: move Ops to the new block
-            // First emit Ops to the new block, then move the new block to the body of the approxForOp
-            Block* tempBlock = rewriter.createBlock(region, {}, std::nullopt, std::nullopt); // side-effect: change insert point to the end of the created block
-
-            // llvm::dbgs() << "moving ops to new block\n";
-            
-            std::vector<Operation*> opsInRegion;
-            
-            for (auto* op : opsToMove) {
-                // here we use rewriter to move the Ops between the 2 annotations in the new block
-                auto* newOp = moveMarkedOpsToNewBlock(op, rewriter);
-                opsInRegion.push_back(newOp);
-                func::CallOp newCallOp = dyn_cast<func::CallOp>(newOp);
-                if(newCallOp && newCallOp.getCallee().compare(StringRef("knob_end")) == 0) {
-                    // we need to replace the end_knob with the approxOp
-                    end_knob = newCallOp;
-                }
-            }
-
-            for (auto* op : opsInRegion) {
-                track_users(*op, users, results);
-                track_producers(*op, producers, producerVals);
-            }
-            
-            generate_approx_outs(opsInRegion, users, results, resultTypes);
-
-            rewriter.replaceOpWithNewOp<approxMLIR::yieldOp>(end_knob, results);  
-
-            
-            // step 4: emit approxOp (producers, state, rf, QoS_in, QoS_out -> users) by replacing the start_knob
-            
-            rewriter.setInsertionPoint(start_knob);
-            auto approxOp = rewriter.replaceOpWithNewOp<approxMLIR::KnobOp>(start_knob, TypeRange(ArrayRef<Type>(resultTypes)), state, 0, 0, std::vector<int>{}, std::vector<int>{}, producerVals, "loop_perforate"); // temporarily set rf, QoS_in, and QoS_out to 0 (todo)
-            
-
-            // step 5: move the tempBlock to the approxOp
-            Region & approxRegion = approxOp.getBody();
-            Block* approxBlock = rewriter.createBlock(&approxRegion, approxRegion.end(), std::nullopt, std::nullopt);
-            rewriter.mergeBlocks(tempBlock, approxBlock, std::nullopt);
-            
-            
-            // step 6: finish
-            rewriter.restoreInsertionPoint(savedInsertPoint);
-            dump_region(region);
-            return success();
-        }
-    };
-
-    struct EmitAnnotation: public OpRewritePattern<approxMLIR::utilAnnoationFuncSubstitutionOp> {
-        using OpRewritePattern<approxMLIR::utilAnnoationFuncSubstitutionOp>::OpRewritePattern;
-
-        LogicalResult
-        matchAndRewrite(approxMLIR::utilAnnoationFuncSubstitutionOp annotationOp,
-            PatternRewriter &rewriter) const final {
-            StringRef from = annotationOp.getFrom();
-            StringRef to = annotationOp.getTo();
-            Region* parentRegion = annotationOp->getParentRegion();
-
-            // Iterate through the region to locate the <from> function
-            for (Block &block : parentRegion->getBlocks()) {
-                for (Operation &op : block.getOperations()) {
-                    if (auto funcOp = dyn_cast<func::FuncOp>(op)) {
-                        // llvm::dbgs() << "funcOp: " << funcOp.getSymName() << "\n";
-                        if (funcOp.getSymName().compare(from) == 0) {
-                            Region& funcBody = funcOp.getBody();
-                            rewriter.setInsertionPointToStart(&funcBody.front());
-                            rewriter.create<approxMLIR::transformOp>(funcOp.getLoc(), StringRef("NNsubstitute"), 1);
-                            // Create a new function with the same signature as the original
-                            break; // Stop after replacing the first occurrence
-                        }
-                    }
-                }
-            }
-
-            rewriter.eraseOp(annotationOp);
-            return success();
-        }
-    };
-
-    struct EmitApproxPass
-    : public impl::EmitApproxPassBase<EmitApproxPass> {
-        using EmitApproxPassBase::EmitApproxPassBase;
-
-        void runOnOperation() override {
-            ConversionTarget target(getContext());
-            
-            target.addIllegalOp<approxMLIR::utilAnnoationFuncSubstitutionOp>();
-
-            target.addDynamicallyLegalOp<func::CallOp>([](func::CallOp op) {
-                // if it's a func::CallOp with Callee == "knob_start", we want to convert it
-                return op.getCallee().compare(StringRef("knob_start")) != 0; 
-            });
-
-            target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
-
-            RewritePatternSet patterns(&getContext());
-            patterns.add<AnnocationOpConversion>(&getContext());
-            patterns.add<EmitAnnotation>(&getContext());
-            // GreedyRewriteConfig config;
-            // config.maxIterations = 1;
-            if(failed(applyPartialConversion(getOperation(), target, std::move(patterns)))) {
-                return signalPassFailure();
-            }
-        }
-    };
-}
-}
+    RewritePatternSet patterns(&getContext());
+    patterns.add<EmitErrorKnobs>(&getContext());
+    // GreedyRewriteConfig config;
+    // config.maxIterations = 1;
+    (void)(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns)));
+  }
+};
+} // namespace
+} // namespace mlir
 
 
 namespace mlir{

@@ -47,20 +47,7 @@ class ToolBox:
         if not keep_temp_files:
             os.system(f"rm {mlir_path1}.tmp")
             os.system(f"rm {mlir_path2}.tmp")
-            
-    def optimize_mlir(self, mlir_path, output_path):
-        os.system(f"{self.opt_exec_path} {mlir_path} -emit-approx -config-approx > {output_path}")
-            
-    def write2file_auxiliary_mlir_str(self, mlir_path):
-        s = """
-            module {
-                "approxMLIR.util.annoatation.func_substitution"() <{from = "predict", to = "approx_predict"}> : () -> ()
-                "approxMLIR.util.annoatation.func_substitution"() <{from = "learn", to = "approx_learn"}> : () -> ()
-            }
-        """
-        with open(mlir_path, "w") as f:
-            f.write(s)
-        return s
+     
             
 if __name__ == "__main__":
     replace_exec_path = "../../external-tools/approx/replace"

@@ -14,3 +14,4 @@ test/python/*.mlir
 test/python/*.mlirbc
 test/python/*.png
 test/python/*/
+test/llm/*.mlir

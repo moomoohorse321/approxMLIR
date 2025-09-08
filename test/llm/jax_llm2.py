@@ -31,21 +31,24 @@ class ModelCompilerRunner:
             'tokenizer_class': BertTokenizer,
             'pretrained': 'bert-base-uncased',
             'max_length': 512,  # BERT's actual max length
-            'task': 'masked_lm'
+            'task': 'masked_lm',
+            'from_pt': False
         },
         'gpt2': {
             'model_class': FlaxGPT2LMHeadModel,
             'tokenizer_class': GPT2Tokenizer,
             'pretrained': 'gpt2',  # You can also use 'distilgpt2' for smaller size
             'max_length': 1024,  # GPT-2's actual max length
-            'task': 'generation'
+            'task': 'generation',
+            'from_pt': False
         },
         'llama': {
             'model_class': FlaxLlamaForCausalLM,
             'tokenizer_class': LlamaTokenizer,
             'pretrained': 'openlm-research/open_llama_3b',  # Small Llama model
-            'max_length': 4096,  # Llama's actual max length
-            'task': 'generation'
+            'max_length': 2048,  # Llama's actual max length
+            'task': 'generation',
+            'from_pt': True
         }
     }
     
@@ -63,7 +66,7 @@ class ModelCompilerRunner:
         
         # Load model and tokenizer
         print(f"Loading {model_type} model: {self.config['pretrained']}...")
-        self.model = self.config['model_class'].from_pretrained(self.config['pretrained'])
+        self.model = self.config['model_class'].from_pretrained(self.config['pretrained'], from_pt = self.config['from_pt'])
         self.tokenizer = self.config['tokenizer_class'].from_pretrained(self.config['pretrained'])
         
         # Set pad token if not exists (needed for GPT2)
@@ -115,6 +118,8 @@ class ModelCompilerRunner:
         with open(pretty_mlir_path, "w") as f:
             f.write(self.get_stablehlo_asm(stablehlo_module))
         print(f"Saved pretty MLIR to {pretty_mlir_path}")
+        
+        # optimize mlir
         
         # Load compiled module
         self.compiled_module = ToolBox.load_mlir_from_file(mlir_path, backend_name = "gpu").jit_forward_fn

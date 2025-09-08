@@ -1,7 +1,9 @@
 
 add_mlir_dialect_library(MLIRApproxMLIRTransforms
+  PreEmitTransformations.cpp
   EmitApprox.cpp
   ConfigApprox.cpp
+  TransformApprox.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Dialect/Affine
@@ -9,7 +11,6 @@ add_mlir_dialect_library(MLIRApproxMLIRTransforms
   DEPENDS
   MLIRapproxMLIROpsIncGen
   MLIRapproxMLIRPassIncGen
-  PassesIncGen
 
   LINK_LIBS PUBLIC
   MLIRAffineDialect
@@ -42,12 +43,12 @@ add_mlir_dialect_library(MLIRApproxMLIRTransforms
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
   if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9)
-    target_link_libraries(MLIRApproxTransforms PUBLIC stdc++fs)
+    target_link_libraries(MLIRApproxMLIRTransforms PUBLIC stdc++fs)
   endif()
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 7)
-    target_link_libraries(MLIRApproxTransforms PUBLIC c++experimental)
+    target_link_libraries(MLIRApproxMLIRTransforms PUBLIC c++experimental)
   elseif(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9)
-    target_link_libraries(MLIRApproxTransforms PUBLIC c++fs)
+    target_link_libraries(MLIRApproxMLIRTransforms PUBLIC c++fs)
   endif()
 endif()

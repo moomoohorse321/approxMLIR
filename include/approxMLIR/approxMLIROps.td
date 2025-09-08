@@ -103,7 +103,8 @@ def decideOp : approxMLIR_Op<"decide"> {
               num_thresholds = 1 : i32,
               thresholds = array<i32: 2>,
               thresholds_lowers = array<i32: 0>,
-              thresholds_uppers = array<i32: 4>
+              thresholds_uppers = array<i32: 4>,
+            transform_type = "func_substitution"
           }> : (f32) -> ()
         ```
     }];
@@ -114,7 +115,9 @@ def decideOp : approxMLIR_Op<"decide"> {
                          DenseI32ArrayAttr: $thresholds_lowers,
                          DenseI32ArrayAttr: $decision_values,
                          DenseI32ArrayAttr: $thresholds,
-                         DenseI32ArrayAttr: $decisions);
+                         DenseI32ArrayAttr: $decisions,
+                         SymbolNameAttr: $transform_type
+                        );
 
     // Corrected assemblyFormat: Removed quotes around parentheses. Used backticks for colon.
     let assemblyFormat = "`(` $state `)` attr-dict `:` type($state)";
@@ -123,15 +126,80 @@ def decideOp : approxMLIR_Op<"decide"> {
 def transformOp : approxMLIR_Op<"transform"> {
     let summary = "The markup Op that holds the type of transformation as an int.";
     let description = [{
-        The end-to-end transformation will consist of 3 stages, transformOp is responsible for the 3rd stage.
-            1. Lower front-end MLIR to approxMLIR [emit approxOps] -> this is the form which can be auto-tuned
-            2. Lower decideOp to if (flatten the decision tree) [decision transformation] -> after auto-tune, this is a partially lowered form shared between each approx Op
-            2.1 Lower checkerOp (optionally), to be implemented later in the project. [safety transformation] -> after auto-tune, this is a partially lowered form shared between each approx Op
-            3. Within each branch, lower the internal exact Op to approximate form. [approximate transformation] -> final step to lower it to standard dialects by performing approx transformation
+        Currently there are 3 transformations:
+            * task_skipping
+            * loop_perforate
+            * func_substitute
+        We require different things for each transformations
+        1. task_skipping:
+            * task skipping operate on if-else statements. It will select the one branch to execute.
+            * each branch must not return any values (because knobValue = 0 means skip all branches, which won't have a default value).
+            Example workload is scf.if %0 {
+                func.call @v1_impl(%arg0, %arg1, %arg2) : (i32, memref<?xi32>, i32) -> ()
+            } else {
+                %1 = arith.cmpi sle, %arg0, %c20_i32 : i32
+                scf.if %1 {
+                    func.call @v2_impl(%arg0, %arg1, %arg2) : (i32, memref<?xi32>, i32) -> ()
+                } else {
+                    func.call @v3_impl(%arg0, %arg1, %arg2) : (i32, memref<?xi32>, i32) -> ()
+                }
+            }
+        2. loop_perforate:
+            * loop perforate operates on scf.for loops. 
+            Example workload:
+            "approxMLIR.util.annotation.decision_tree"() <{decision_values = array<i32: 0, 1>, decisions = array<i32: 1, 2>, func_name = "base", num_thresholds = 1 : i32, thresholds = array<i32: 2>, thresholds_lowers = array<i32: 0>, thresholds_uppers = array<i32: 4>, transform_type = "loop_perforate"}> : () -> ()
+            llvm.mlir.global internal constant @str0("Base function result: %d\0A\00") {addr_space = 0 : i32}
+            llvm.func @printf(!llvm.ptr, ...) -> i32
+            func.func @base(%arg0: i32, %arg1: i32) -> i32 attributes {llvm.linkage = #llvm.linkage<external>} {
+                %c1 = arith.constant 1 : index
+                %c0_i32 = arith.constant 0 : i32
+                %0 = arith.index_cast %arg0 : i32 to index
+                %1 = scf.for %arg2 = %c1 to %0 step %c1 iter_args(%arg3 = %c0_i32) -> (i32) {
+                %2 = arith.index_cast %arg2 : index to i32
+                %3 = arith.muli %2, %arg1 : i32
+                %4 = arith.addi %arg3, %3 : i32
+                scf.yield %4 : i32
+                }
+                return %1 : i32
+            }
+        3. func_substitute:
+            * func substitute operates on functions who are annotated with "approxMLIR.util.annotation.convert_to_call"() <{func_name = "base"}> : () -> ()
+            * For each substution, the user must provide a approximate version of the function. 
+            Example workload:
+            "approxMLIR.util.annotation.decision_tree"() <{decision_values = array<i32: 0, 1>, decisions = array<i32: 0, 1>, func_name = "base", num_thresholds = 1 : i32, thresholds = array<i32: 2>, thresholds_lowers = array<i32: 0>, thresholds_uppers = array<i32: 4>, transform_type = "func_substitute"}> : () -> ()
 
+            "approxMLIR.util.annoatation.convert_to_call"() <{func_name = "base"}> : () -> ()
+
+            llvm.mlir.global internal constant @str0("Base function result: %d\0A\00") {addr_space = 0 : i32}
+            llvm.func @printf(!llvm.ptr, ...) -> i32
+            func.func @approx_base(%arg0: i32, %arg1: i32) -> i32 attributes {llvm.linkage = #llvm.linkage<external>} {
+                %c1 = arith.constant 1 : index
+                %c2 = arith.constant 2 : index
+                %c0_i32 = arith.constant 0 : i32
+                %0 = arith.index_cast %arg0 : i32 to index
+                %1 = scf.for %arg2 = %c1 to %0 step %c2 iter_args(%arg3 = %c0_i32) -> (i32) {
+                %2 = arith.index_cast %arg2 : index to i32
+                %3 = arith.muli %2, %arg1 : i32
+                %4 = arith.addi %arg3, %3 : i32
+                scf.yield %4 : i32
+                }
+                return %1 : i32
+            }
+            func.func @base(%arg0: i32, %arg1: i32) -> i32 attributes {llvm.linkage = #llvm.linkage<external>} {
+                %c1 = arith.constant 1 : index
+                %c0_i32 = arith.constant 0 : i32
+                %0 = arith.index_cast %arg0 : i32 to index
+                %1 = scf.for %arg2 = %c1 to %0 step %c1 iter_args(%arg3 = %c0_i32) -> (i32) {
+                %2 = arith.index_cast %arg2 : index to i32
+                %3 = arith.muli %2, %arg1 : i32
+                %4 = arith.addi %arg3, %3 : i32
+                scf.yield %4 : i32
+                }
+                return %1 : i32
+            }
         Example:
         ```mlir
-             "approxMLIR.transform"() <{knob_val = 1 : i32, transform_type = "NNsubstitute"}> : () -> ()
+             "approxMLIR.transform"() <{knob_val = 1 : i32, transform_type = "task_skipping"}> : () -> ()
         ```
     }];
     let arguments = (ins SymbolNameAttr: $transform_type, I32Attr:$knob_val);
@@ -189,24 +257,9 @@ def approxMLIR_KnobOp : approxMLIR_Op<"knob">  {
         Implementation Design Choice:
             Choice 1: Have this KnobOp, and internally define how it should be tranformed. Here, knob_val [int] -> (dialect, Op, transformation) 
             Choice 2: Use this Op as a template to define approxOp for each transformation. The output of decision tree (knob [int]) will directly select a transformation. (i.e. knob_val [int] -> transformation)
-        Example:
-
-        ```mlir
-            %state = func.call @get_state(%inputs) : (...) -> (f32)
-            approx.knob %args, %state, %rf, %QoS_in, %QoS_out : i32[], i32, i32, i32, i32 {
-                approxMLIR.decide %state, %num_thresholds, %thresholds, %decisions : i32, i32, i32[], i32[] {
-                    // some kernels
-                }
-                approxMLIR.checker %state : i32 {
-                    // 2 kernels
-                }
-                // Define the internal Op here
-                %internal_op = approxMLIR.for ...
-            }
-        ```
     }];
 
-    let arguments = (ins AnyType:$state, I32Attr:$id, I32Attr:$rf, DenseI32ArrayAttr:$QoS_in, DenseI32ArrayAttr:$QoS_out, Variadic<AnyType>:$args, SymbolNameAttr: $transform_type); //  state, rf, QoS_in, QoS_out, args
+    let arguments = (ins AnyType:$state, I32Attr:$id, I32Attr:$rf, DenseI32ArrayAttr:$QoS_in, DenseI32ArrayAttr:$QoS_out, Variadic<AnyType>:$args, SymbolNameAttr: $transform_type);
     let results = (outs Variadic<AnyType>:$results);
     let regions = (region AnyRegion:$body);
 
@@ -214,18 +267,51 @@ def approxMLIR_KnobOp : approxMLIR_Op<"knob">  {
 
 // ------------------- Utility Ops ------------------- //
 
-def utilAnnoationFuncSubstitutionOp : approxMLIR_Op<"util.annoatation.func_substitution"> {
-    let summary = "A utility Op to print the annoation of the module.";
+def utilAnnotationConvertToCallOp : approxMLIR_Op<"util.annotation.convert_to_call"> {
+    let summary = "A utility Op to convert a function to a call to its body.";
     let description = [{
         Example:
         ```mlir
-            "approxMLIR.util.annoatation.func_substitution"() <{from = "predict", to = "approx_predict"}> : () -> ()
+            "approxMLIR.util.annotation.convert_to_call"() <{func_name = "main"}> : () -> ()
         ```
     }];
 
-    let arguments = (ins SymbolNameAttr: $from, SymbolNameAttr: $to);
+    let arguments = (ins SymbolNameAttr: $func_name);
 }
 
+def utilAnnotationDecisionTreeOp : approxMLIR_Op<"util.annotation.decision_tree"> {
+    let summary = "A utility Op to support identifying the scope and the attribtues of the decision tree.";
+    let description = [{
+        This op annotates the modules to identify:
+            * The function to inject decision tree
+            * a set of attributes that are identical to the attributes of the decision tree Op.
+        
+        By lowering this Op, the decision tree op will be injected to the module with the specified attributes.
+
+        Example:
+        ```mlir
+        "approxMLIR.util.annotation.decision_tree"() <{
+            decision_tree = "main",
+            transform_type = "loop_perforate",
+            num_thresholds = 1 : i32,
+            thresholds_uppers = array<i32: 10>,
+            thresholds_lowers = array<i32: 0>,
+            decision_values = array<i32: 0, 1>,
+            thresholds = array<i32: 5>,
+            decisions = array<i32: 0, 1>
+        }> : () -> ()
+        ```
+    }];
+
+    let arguments = (ins SymbolNameAttr: $func_name,
+                         SymbolNameAttr: $transform_type,   
+                         I32Attr: $num_thresholds,
+                         DenseI32ArrayAttr: $thresholds_uppers,
+                         DenseI32ArrayAttr: $thresholds_lowers,
+                         DenseI32ArrayAttr: $decision_values,
+                         DenseI32ArrayAttr: $thresholds,
+                         DenseI32ArrayAttr: $decisions);
+}
 
 
 #endif // APPROXMLIR_OPS
