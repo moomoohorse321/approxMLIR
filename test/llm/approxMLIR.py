@@ -59,11 +59,11 @@ def _split_top_level_module(mlir_text: str):
     """
     Extract pieces around the FIRST top-level 'module { ... }' (possibly with
     attributes: 'module attributes {...} { ... }').
-    Returns: (preamble, header, body, postamble)
-      - preamble: text before 'module'
-      - header:   'module' and any attributes up to (but not including) the '{' that starts the body
-      - body:     the text inside the outermost module braces
-      - postamble:anything after the closing '}'
+    Returns:        (preamble, header, body, postamble)
+      - preamble:   text before 'module'
+      - header:     'module' and any attributes up to (but not including) the '{' that starts the body
+      - body:       the text inside the outermost module braces
+      - postamble:  anything after the closing '}'
     Raises ValueError if no module block is found.
     """
     # Find the 'module' keyword:
@@ -138,10 +138,28 @@ class ToolBox:
         else:
             raise ValueError("Unsupported backend name. Use 'cpu' or 'gpu'.")
         
-        with open(mlir_path, "r") as f:
-            mlir_module = f.read()
+        binary_path = mlir_path + ".bin"
+        
+        if os.path.exists(binary_path):
+            print(f"✅ Loading compiled flatbuffer from cache: {binary_path}")
+            with open(binary_path, "rb") as f:
+                flatbuffer_blob = f.read()
+        else:
+            print(f"⏳ Compiling MLIR file, no cache found for: {mlir_path}")
+            with open(mlir_path, "r") as f:
+                mlir_module = f.read()
 
-        flatbuffer_blob = compile_str(mlir_module, target_backends=target_backends, input_type="stablehlo")
+            # This is the high-overhead compilation step.
+            flatbuffer_blob = compile_str(
+                mlir_module,
+                target_backends=target_backends,
+                input_type="stablehlo"
+            )
+
+            # Save the compiled flatbuffer to the .bin file for future runs.
+            with open(binary_path, "wb") as f:
+                print(f"Writing compiled flatbuffer to cache: {binary_path}")
+                f.write(flatbuffer_blob)
 
         config = ireert.Config(target_backends[0])
         ctx = ireert.SystemContext(config=config)

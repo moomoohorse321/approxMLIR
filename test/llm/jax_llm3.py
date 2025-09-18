@@ -1,15 +1,3 @@
-"""
-void call_llm_x(string prompt) {
-    // call python API, internally call LLM text generatioin.
-    
-}
-void call_llm(string prompt, int state) {
-    if(state <= threshold 1) call_llm_1(prompt);
-    else if (state > threshold 1) call_llm_2(...);
-    else if  (<condition 3>) call_llm_3(...);
-}
-"""
-
 from approxMLIR import ToolBox
 import jax
 import jax.numpy as jnp
@@ -57,7 +45,7 @@ class ModelCompilerRunner:
         'llama': {
             'model_class': FlaxLlamaForCausalLM,
             'tokenizer_class': LlamaTokenizer,
-            'pretrained': 'openlm-research/open_llama_3b',  # Small Llama model
+            'pretrained': 'openlm-research/open_llama_3b_v2',  # Small Llama model
             'max_length': 2048,  # Llama's actual max length
             'task': 'generation',
             'from_pt': True
@@ -78,7 +66,7 @@ class ModelCompilerRunner:
         
         # Load model and tokenizer
         print(f"Loading {model_type} model: {self.config['pretrained']}...")
-        self.model = self.config['model_class'].from_pretrained(self.config['pretrained'], from_pt = self.config['from_pt'])
+        # self.model = self.config['model_class'].from_pretrained(self.config['pretrained'], from_pt = self.config['from_pt'])
         self.tokenizer = self.config['tokenizer_class'].from_pretrained(self.config['pretrained'])
         
         # Set pad token if not exists (needed for GPT2)
@@ -98,22 +86,24 @@ class ModelCompilerRunner:
         print(f"Compiling {self.model_type} model...")
         
         # Create example input shape
-        sample_shape = (batch_size, self.config['max_length'])
-        sample_input = jnp.ones(sample_shape, dtype=jnp.int32)
+        # sample_shape = (batch_size, self.config['max_length'])
+        # sample_input = jnp.ones(sample_shape, dtype=jnp.int32)
         
-        # Define forward function based on task type
-        if self.config['task'] == 'masked_lm':
-            def forward_fn(input_ids):
-                return self.model(input_ids).logits
-        else:  # generation tasks
-            def forward_fn(input_ids):
-                return self.model(input_ids).logits
+        # # Define forward function based on task type
+        # if self.config['task'] == 'masked_lm':
+        #     def forward_fn(input_ids):
+        #         return self.model(input_ids).logits
+        # else:  # generation tasks
+        #     def forward_fn(input_ids):
+        #         logits = self.model(input_ids).logits
+        #         return logits[:, -1, :]  # <-- only last-token logits
+
         
-        # JIT compile and export
-        jitted_fn = jax.jit(forward_fn)
-        input_shape = jax.ShapeDtypeStruct(sample_input.shape, sample_input.dtype)
-        exported = export.export(jitted_fn)(input_shape)
-        stablehlo_module = exported.mlir_module()
+        # # JIT compile and export
+        # jitted_fn = jax.jit(forward_fn)
+        # input_shape = jax.ShapeDtypeStruct(sample_input.shape, sample_input.dtype)
+        # exported = export.export(jitted_fn)(input_shape)
+        # stablehlo_module = exported.mlir_module()
         
         # Save MLIR files
         if save_path is None:
@@ -121,15 +111,15 @@ class ModelCompilerRunner:
         
         # Save raw MLIR
         mlir_path = f"{save_path}.mlir"
-        with open(mlir_path, "w") as f:
-            f.write(stablehlo_module)
-        print(f"Saved raw MLIR to {mlir_path}")
+        # with open(mlir_path, "w") as f:
+        #     f.write(stablehlo_module)
+        # print(f"Saved raw MLIR to {mlir_path}")
         
-        # Save pretty-printed version
-        pretty_mlir_path = f"{save_path}_pretty.mlir"
-        with open(pretty_mlir_path, "w") as f:
-            f.write(self.get_stablehlo_asm(stablehlo_module))
-        print(f"Saved pretty MLIR to {pretty_mlir_path}")
+        # # Save pretty-printed version
+        # pretty_mlir_path = f"{save_path}_pretty.mlir"
+        # with open(pretty_mlir_path, "w") as f:
+        #     f.write(self.get_stablehlo_asm(stablehlo_module))
+        # print(f"Saved pretty MLIR to {pretty_mlir_path}")
         
         # optimize mlir
         
@@ -156,30 +146,27 @@ class ModelCompilerRunner:
         return encoded['input_ids']
     
     def run_inference(self, text_input, decode_output=True):
-        """Run inference on text input and optionally decode the output."""
         if not self.compiled_module:
             raise RuntimeError("Model not compiled yet. Run compile_model() first.")
         
         print(f"\nRunning inference on: '{text_input}'")
-        
+
         # Tokenize input
         input_ids = self.tokenize_text(text_input)
         print(f"Tokenized shape: {input_ids.shape}")
-        
+
         # Run inference
         output_logits = self.compiled_module.main(input_ids).to_host()
-        print(f"Output shape: {output_logits.shape}")
-        
+        print(f"Output shape: {output_logits.shape}")  # now [B, V] for generation
+
         if decode_output:
-            # Different decoding strategies based on task
             if self.config['task'] == 'masked_lm':
-                # For BERT: show predictions for [MASK] tokens
                 return self._decode_masked_lm(text_input, input_ids, output_logits)
             else:
-                # For GPT2/Llama: show next token predictions
                 return self._decode_generation(input_ids, output_logits)
-        
+
         return output_logits
+
     
     def _decode_masked_lm(self, original_text, input_ids, logits):
         """Decode predictions for masked language modeling."""
@@ -214,62 +201,42 @@ class ModelCompilerRunner:
     
     def _decode_generation(self, input_ids, logits):
         """Decode predictions for text generation."""
-        # Get the last token's predictions
-        last_logits = logits[0, -1, :]
-        
+        # Now logits are [B, V], so just take top tokens directly
+        last_logits = logits[0]  # shape [V]
+
         # Get top 5 next token predictions
         top_5_tokens = np.argsort(last_logits)[-5:][::-1]
         top_5_probs = jax.nn.softmax(last_logits)[top_5_tokens]
-        
+
         predictions = []
         for token_id, prob in zip(top_5_tokens, top_5_probs):
             token = self.tokenizer.decode([token_id])
             predictions.append(f"{token} ({prob:.3f})")
-        
-        # Decode the input text
+
         input_text = self.tokenizer.decode(input_ids[0], skip_special_tokens=True)
-        
+
         return {
             'input_text': input_text,
             'next_token_predictions': predictions
         }
+
     
     def generate_text(self, prompt, num_tokens=50, temperature=1.0, stop_at_sentence=False):
-        """Generate text iteratively, one token at a time.
-        
-        Args:
-            prompt: Initial text prompt
-            num_tokens: Maximum number of tokens to generate
-            temperature: Sampling temperature (higher = more random)
-            stop_at_sentence: Stop at sentence-ending punctuation
-        
-        Returns:
-            Dictionary with generated text and token-by-token info
-        """
         if not self.compiled_module:
             raise RuntimeError("Model not compiled yet. Run compile_model() first.")
-        
+
         if self.config['task'] == 'masked_lm':
             print("Text generation is only supported for GPT2 and Llama models.")
             return None
-        
+
         print(f"\nGenerating text from prompt: '{prompt}'")
         print(f"Parameters: max_tokens={num_tokens}, temperature={temperature}, stop_at_sentence={stop_at_sentence}")
         print("-" * 50)
+
+        encoded = self.tokenizer(prompt, return_tensors='np', padding='max_length', truncation=True, max_length=self.config['max_length'])
         
-        # Tokenize the prompt with padding
-        encoded = self.tokenizer(
-            prompt,
-            padding='max_length',
-            truncation=True,
-            max_length=self.config['max_length'],
-            return_tensors='np'
-        )
+        input_ids = encoded['input_ids'][0]
         
-        input_ids = encoded['input_ids'][0]  # Get first batch element
-        attention_mask = encoded['attention_mask'][0]
-        
-        # Find the first padding position (where we'll start generating)
         pad_token_id = self.tokenizer.pad_token_id
         pad_positions = np.where(input_ids == pad_token_id)[0]
         
@@ -280,61 +247,40 @@ class ModelCompilerRunner:
                 'tokens_generated': 0,
                 'reason': 'max_length_reached'
             }
-        
-        # Track generation
+            
+        generation_position = pad_positions[0]
+
         generated_tokens = []
-        generation_position = pad_positions[0]  # First padding position
-        stop_tokens = {self.tokenizer.convert_tokens_to_ids(t) for t in ['.', '!', '?'] if t in self.tokenizer.get_vocab()}
-        
-        # Generate tokens one by one
-        for i in range(min(num_tokens, len(pad_positions))):
-            # Prepare input as JAX array
-            jax_input = jnp.array([input_ids])  # Add batch dimension
-            
-            # Run model
-            logits = self.compiled_module.main(jax_input).to_host()
-            
-            # Get logits for the last non-pad token
-            current_position = generation_position + i - 1
-            next_token_logits = logits[0, current_position, :]
-            
-            # Apply temperature
+        for i in range(num_tokens):
+            # Always feed the full context seen so far
+            jax_input = jnp.array([input_ids])
+
+            # Get logits for **next token only**
+            logits = self.compiled_module.main(jax_input).to_host()[0]  # shape [V]
+
+            # Apply temperature and softmax
             if temperature != 1.0:
-                next_token_logits = next_token_logits / temperature
-            
-            # Sample from the distribution
-            probs = jax.nn.softmax(next_token_logits)
-            next_token_id = np.random.choice(len(probs), p=np.array(probs))
-            
-            # Update input_ids
+                logits = logits / temperature
+            probs = jax.nn.softmax(logits)
+            next_token_id = int(np.random.choice(len(probs), p=np.array(probs)))
+
+            # Append token
             input_ids[generation_position + i] = next_token_id
-            attention_mask[generation_position + i] = 1
-            
-            # Decode the token
             token_text = self.tokenizer.decode([next_token_id])
-            generated_tokens.append({
-                'token_id': int(next_token_id),
-                'token_text': token_text,
-                'position': int(generation_position + i)
-            })
-            
-            # Print token as it's generated
+            generated_tokens.append(token_text)
             print(token_text, end='', flush=True)
-            
-            # Check stopping conditions
-            if stop_at_sentence and next_token_id in stop_tokens:
-                print(f"\n[Stopped at sentence end]")
-                break
-            
+
+            # Stop if EOS or sentence end
             if next_token_id == self.tokenizer.eos_token_id:
-                print(f"\n[Reached end-of-sequence token]")
+                print("\n[Reached end-of-sequence token]")
                 break
-        
+            if stop_at_sentence and token_text in {'.', '!', '?'}:
+                print("\n[Stopped at sentence end]")
+                break
+
         print("\n" + "-" * 50)
-        
-        # Decode the full generated text
         generated_text = self.tokenizer.decode(input_ids, skip_special_tokens=True)
-        
+
         return {
             'prompt': prompt,
             'generated_text': generated_text,
@@ -342,6 +288,7 @@ class ModelCompilerRunner:
             'token_details': generated_tokens,
             'reason': 'completed'
         }
+
     
     def test_generation_capabilities(self):
         """Test the model's generation capabilities with various prompts."""
