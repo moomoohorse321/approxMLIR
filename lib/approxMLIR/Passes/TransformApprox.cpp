@@ -57,19 +57,23 @@ namespace {
 struct FunctionSubstitution : public OpRewritePattern<approxMLIR::transformOp> {
   using OpRewritePattern<approxMLIR::transformOp>::OpRewritePattern;
   // if there is an Op called approx_<name> in the module, we can replace it.
-  static func::FuncOp findReplacingFunc(func::FuncOp funcOp, Region *parentRegion) {
-    func::FuncOp approxFunc = nullptr;
-    auto approxFuncName = "approx_" + funcOp.getName().str();
+  static func::FuncOp findReplacingFunc(func::FuncOp funcOp, Region *parentRegion, int approx_knob_num) {
+    auto approxFuncName = "approx_" + funcOp.getName().str() + "_" + std::to_string(approx_knob_num);
     for (Block &block : parentRegion->getBlocks()) {
       for (Operation &op : block.getOperations()) {
         auto _funcOp = dyn_cast<func::FuncOp>(op);
-        if (_funcOp && _funcOp.getName() == approxFuncName) {
-          approxFunc = _funcOp;
-          break;
-        }
+        if (_funcOp && _funcOp.getName() == approxFuncName) return _funcOp;
       }
     }
-    return approxFunc;
+    approxFuncName = "approx_" + funcOp.getName().str();
+    for (Block &block : parentRegion->getBlocks()) {
+      for (Operation &op : block.getOperations()) {
+        auto _funcOp = dyn_cast<func::FuncOp>(op);
+        if (_funcOp && _funcOp.getName() == approxFuncName) return _funcOp;
+      }
+    }
+    assert("Approx functions don't exist, check their names!");
+    return NULL;
   }
 
   /**
@@ -86,26 +90,29 @@ struct FunctionSubstitution : public OpRewritePattern<approxMLIR::transformOp> {
 
     if (0 != transformType.compare(StringRef("func_substitute")))
       return failure();
-    
+
     // find the parent funcOp (since current region can be deeply nested)
     Operation* parentFuncOp = transformOp; 
+    int32_t decisionValue = transformOp.getKnobVal();
+    
+    if(!decisionValue) { // stay exact if knob val is 0
+      rewriter.eraseOp(transformOp);
+      return success();
+    }
+
     while(!dyn_cast<func::FuncOp>(parentFuncOp->getParentOp())) 
       parentFuncOp = parentFuncOp->getParentOp();
     parentFuncOp = parentFuncOp->getParentOp();
     Region *parentRegion = parentFuncOp->getParentRegion();
-    func::FuncOp approxFunc = findReplacingFunc(dyn_cast<func::FuncOp>(parentFuncOp), parentRegion);
+    func::FuncOp approxFunc = findReplacingFunc(dyn_cast<func::FuncOp>(parentFuncOp), 
+    parentRegion, decisionValue);
 
     assert(approxFunc && "func_substitute transformOp must be replaced by an approx function (not available).");
     
     // it's assumed that the region that contains transformOp only has one additonal op (which is a call to __internal_<func_name>)
     // your task: change the call __internal_<func_name> to call approx_<func_name>
     
-    int32_t decisionValue = transformOp.getKnobVal();
     
-    if(!decisionValue) {
-      rewriter.eraseOp(transformOp);
-      return success();
-    }
 
     // Find the call operation in the same block as the transformOp
     Block *block = transformOp->getBlock();
