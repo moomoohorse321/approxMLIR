@@ -1,225 +1,294 @@
-import iree.compiler.tf
-import iree.runtime
-import tensorflow as tf
 import numpy as np
 from matplotlib import pyplot as plt
-from iree.tf.support import module_utils
-from iree import runtime as ireert
-from iree.compiler import compile_str
 import os
-
+import shutil
+import subprocess
 
 import re
 
-_FUNC_DEF_RE = re.compile(r'(\bfunc\.func(?:\s+\w+)*\s+@)([A-Za-z0-9_.$-]+)')
+class ApproxMLIRSDK:
+    def __init__(self, binary_path, mlir_path):
+        self.binary_dir_path = binary_path
+        self.mlir_dir_path = mlir_path
+        
+        # Ensure the binary and MLIR directories exist
+        os.makedirs(self.binary_dir_path, exist_ok=True)
+        os.makedirs(self.mlir_dir_path, exist_ok=True)
+        
+    def get_knob_val(self, knob_num, state):
+        knob_path = os.path.join(self.binary_dir_path, f'choose_{knob_num}.exec')
+        
+        command = [knob_path, str(state)]
+        print(f"Invoking tool: {' '.join(command)}")
+        result = subprocess.run(command, capture_output=True, text=True, check=True)
+        match = re.search(r'\d+$', result.stdout.strip())
+        if match:
+            return int(match.group(0))
+        return 1 # hardcoded for now
+    
+    def get_mlir_files(self, fname = None):
+        """
+            When auto-tuner wants to read the configurations, it calls toolbox.get_mlir_files()
+            When auto-tuner parses its dict, it calls toolbox.get_mlir_files(tool)
+            
+            return a list of file paths
+        """
+        if fname:
+            # Return the full path for a specific file
+            return os.path.join(self.mlir_dir_path, fname)
+        else:
+            # Return a list of all .mlir files in the directory
+            all_files = os.listdir(self.mlir_dir_path)
+            mlir_files = [os.path.join(self.mlir_dir_path, f) for f in all_files if f.endswith('.mlir')]
+            return mlir_files
+    
+    def move_to_binaries(self, file_path, template_name="approx_kmeans.mlir"):
+        """
+            After you generate a test.exec, you must move them to binary directory so LLM workflow can use them.
+        """
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Source file not found: {file_path}")
+            
+        base_name = os.path.splitext(template_name).split('_')[1]
+        destination_path = os.path.join(self.binary_dir_path, base_name)
+        
+        shutil.move(file_path, destination_path)
+        return destination_path
+    
+    def populate_orchestration_knobs(self, num_knobs, template_name="approx_choose.mlir"):
+        """
+        Populates orchestration knobs by copying a template MLIR file.
+        For example, it copies 'approx_choose.mlir' to 'approx_choose_1.mlir', 'approx_choose_2.mlir', etc.
 
-def _collect_function_names(mlir_text: str) -> list[str]:
-    """Return all function names defined via 'func.func ... @name'."""
-    return [m.group(2) for m in _FUNC_DEF_RE.finditer(mlir_text)]
+        Args:
+            num_knobs (int): The number of knob files to create.
+            template_name (str): The name of the template file located in the mlir_dir_path.
+        
+        Returns:
+            list[str]: A list of paths to the newly created MLIR files.
+        """
+        template_path = os.path.join(self.mlir_dir_path, template_name)
+        if not os.path.exists(template_path):
+            raise FileNotFoundError(f"Template MLIR file not found: {template_path}")
+            
+        created_files = []
+        base_name, extension = os.path.splitext(template_name)
 
-def _rename_defs(mlir_text: str, name_map: dict[str, str]) -> str:
-    def _sub(m: re.Match) -> str:
-        prefix, old = m.group(1), m.group(2)
-        return f"{prefix}{name_map.get(old, old)}"
-    return _FUNC_DEF_RE.sub(_sub, mlir_text)
-
-def _rename_symbol_uses(mlir_text: str, name_map: dict[str, str]) -> str:
-    """
-    Rename all '@name' symbol uses to the mapped names,
-    but skip 'module @name' if present.
-    """
-    at_sym_re = re.compile(r'@([A-Za-z0-9_.$-]+)')
-
-    def should_skip(idx: int) -> bool:
-        window_start = max(0, idx - 20)
-        left = mlir_text[window_start:idx]
-        m = re.search(r'([A-Za-z0-9_.-]+)\s*$', left)
-        return bool(m and m.group(1) == 'module')
-
-    def _sub(m: re.Match) -> str:
-        old = m.group(1)
-        if old in name_map and not should_skip(m.start()):
-            return '@' + name_map[old]
-        return m.group(0)
-
-    return at_sym_re.sub(_sub, mlir_text)
-
-def rename_mlir_functions(mlir_text: str, number: int) -> str:
-    """Rename all functions to approx_<name>_<number> and update their uses."""
-    func_names = _collect_function_names(mlir_text)
-    name_map = {name: f"approx_{name}_{number}" for name in func_names}
-    out = _rename_defs(mlir_text, name_map)
-    out = _rename_symbol_uses(out, name_map)
-    return out
-
-
-# ---------- merging ----------
-
-def _split_top_level_module(mlir_text: str):
-    """
-    Extract pieces around the FIRST top-level 'module { ... }' (possibly with
-    attributes: 'module attributes {...} { ... }').
-    Returns:        (preamble, header, body, postamble)
-      - preamble:   text before 'module'
-      - header:     'module' and any attributes up to (but not including) the '{' that starts the body
-      - body:       the text inside the outermost module braces
-      - postamble:  anything after the closing '}'
-    Raises ValueError if no module block is found.
-    """
-    # Find the 'module' keyword:
-    m = re.search(r'\bmodule\b', mlir_text)
-    if not m:
-        raise ValueError("No top-level 'module' op found.")
-
-    mod_start = m.start()
-
-    # Find the first '{' after 'module' keyword — that begins the module body.
-    brace_open = mlir_text.find('{', m.end())
-    if brace_open == -1:
-        raise ValueError("Malformed module: missing '{' after 'module'.")
-
-    # Match the corresponding closing brace with a simple brace counter.
-    depth = 0
-    close_idx = None
-    for i in range(brace_open, len(mlir_text)):
-        c = mlir_text[i]
-        if c == '{':
-            depth += 1
-        elif c == '}':
-            depth -= 1
-            if depth == 0:
-                close_idx = i
-                break
-
-    if close_idx is None:
-        raise ValueError("Malformed module: unbalanced braces.")
-
-    preamble = mlir_text[:mod_start]
-    header = mlir_text[mod_start:brace_open].rstrip()
-    body = mlir_text[brace_open + 1:close_idx]
-    postamble = mlir_text[close_idx + 1:]
-    return preamble, header, body, postamble
-
-def merge_mlir_modules(mod1_text: str, mod2_text: str) -> str:
-    """
-    Merge two MLIR modules into a single module:
-      - Uses the exact module header/attributes from mod1
-      - Concatenates mod1 body + mod2 body
-      - Preserves any preamble before 'module' in mod1 and discards mod2's preamble/postamble
-      - If you'd like to keep dialect/preamble lines from mod2, do that before calling this.
-    Assumes each input contains ONE top-level 'module'.
-    """
-    pre1, header1, body1, post1 = _split_top_level_module(mod1_text)
-    _,     _,       body2, _     = _split_top_level_module(mod2_text)
-
-    merged_body = f"{body1.strip()}\n\n{body2.strip()}\n"
-    merged = f"{pre1}{header1} {{\n{merged_body}}}\n"
-    # If mod1 had content after the module (rare), preserve it:
-    if post1.strip():
-        merged += post1
-    return merged
-
-
-
-
-
-class ToolBox:
-    def __init__(self, replace_exec_path, merge_exec_path, opt_exec_path):
-        self.replace_exec_path = replace_exec_path
-        self.merge_exec_path = merge_exec_path
-        self.opt_exec_path = opt_exec_path
+        for i in range(1, num_knobs + 1):
+            new_filename = f"{base_name}_{i}{extension}"
+            destination_path = os.path.join(self.mlir_dir_path, new_filename)
+            
+            shutil.copy(template_path, destination_path)
+            created_files.append(destination_path)
+        
+        return created_files
     
     @staticmethod
-    def load_mlir_from_file(mlir_path, backend_name = "cpu"):
-        if backend_name == "cpu":        
-            target_backends = ["llvm-cpu"]
-        elif backend_name == "gpu":
-            target_backends = ["cuda"]
-        else:
-            raise ValueError("Unsupported backend name. Use 'cpu' or 'gpu'.")
-        
-        binary_path = mlir_path + ".bin"
-        
-        if os.path.exists(binary_path):
-            print(f"✅ Loading compiled flatbuffer from cache: {binary_path}")
-            with open(binary_path, "rb") as f:
-                flatbuffer_blob = f.read()
-        else:
-            print(f"⏳ Compiling MLIR file, no cache found for: {mlir_path}")
-            with open(mlir_path, "r") as f:
-                mlir_module = f.read()
+    def parse_mlir_annotations(mlir_file_path):
+        """
+        Parse MLIR file for approxMLIR.util.annotation.decision_tree annotations
+        and convert them to a dictionary format
+        """
+        choice_sites = {}
 
-            # This is the high-overhead compilation step.
-            flatbuffer_blob = compile_str(
-                mlir_module,
-                target_backends=target_backends,
-                input_type="stablehlo"
+        with open(mlir_file_path, "r") as f:
+            mlir_content = f.read()
+            
+        mlir_fname = os.path.splitext(os.path.basename(mlir_file_path))[0] 
+
+        # Find all approxMLIR.util.annotation.decision_tree annotations
+        pattern = r'"approxMLIR\.util\.annotation\.decision_tree"\(\) <\{([^}]+)\}'
+        matches = re.findall(pattern, mlir_content, re.DOTALL)
+
+        for match in matches:
+            # Extract function name
+            func_name_match = re.search(r'func_name = "([^"]+)"', match)
+            if not func_name_match:
+                continue
+            func_name = func_name_match.group(1)
+
+            # Extract num_thresholds
+            num_thresholds_match = re.search(r"num_thresholds = (\d+)", match)
+            if not num_thresholds_match:
+                continue
+
+            # Extract thresholds_lowers array
+            thresholds_lowers_match = re.search(
+                r"thresholds_lowers = array<i32: ([^>]+)>", match
             )
+            if thresholds_lowers_match:
+                thresholds_lowers_str = thresholds_lowers_match.group(1)
+                thresholds_lowers = [
+                    int(x.strip()) for x in thresholds_lowers_str.split(",")
+                ]
+            else:
+                raise ValueError("ill-formed thresholds_lowers.")
 
-            # Save the compiled flatbuffer to the .bin file for future runs.
-            with open(binary_path, "wb") as f:
-                print(f"Writing compiled flatbuffer to cache: {binary_path}")
-                f.write(flatbuffer_blob)
+            # Extract thresholds_uppers array
+            thresholds_uppers_match = re.search(
+                r"thresholds_uppers = array<i32: ([^>]+)>", match
+            )
+            if thresholds_uppers_match:
+                thresholds_uppers_str = thresholds_uppers_match.group(1)
+                thresholds_uppers = [
+                    int(x.strip()) for x in thresholds_uppers_str.split(",")
+                ]
+            else:
+                raise ValueError("ill-formed thresholds_uppers.")
 
-        config = ireert.Config(target_backends[0])
-        ctx = ireert.SystemContext(config=config)
-        vm_module = ireert.VmModule.from_flatbuffer(ctx.instance, flatbuffer_blob)
-        ctx.add_vm_module(vm_module)
-        
-        return ctx.modules
+            # Extract decision_values array
+            decision_values_match = re.search(
+                r"decision_values = array<i32: ([^>]+)>", match
+            )
+            if decision_values_match:
+                decision_values_str = decision_values_match.group(1)
+                decision_values = [
+                    int(x.strip()) for x in decision_values_str.split(",")
+                ]
+            else:
+                raise ValueError("ill-formed decision_values.")
+
+            # Create dictionary entries for thresholds
+            # Use the actual length of the arrays instead of num_thresholds
+            for i in range(len(thresholds_lowers)):
+                if i < len(thresholds_uppers):
+                    key = f"{mlir_fname}_{func_name}_threshold_{i}"
+                    value = [thresholds_lowers[i], thresholds_uppers[i]]
+                    choice_sites[key] = value
+
+            # Create dictionary entries for decisions
+            # Extract decisions array if it exists
+            decisions_match = re.search(r"decisions = array<i32: ([^>]+)>", match)
+            if decisions_match:
+                decisions_str = decisions_match.group(1)
+                decisions = [int(x.strip()) for x in decisions_str.split(",")]
+
+                # Create decision entries with ranges based on decision_values
+                for i, decision in enumerate(decisions):
+                    key = f"{mlir_fname}_{func_name}_decision_{i}"
+                    # Use the full range of decision_values for each decision
+                    value = [min(decision_values), max(decision_values)]
+                    choice_sites[key] = value
+            else:
+                raise ValueError("ill-formed decision op.")
+
+        return choice_sites
     
-    def link_mlir_modules(self, mlir_path1, mlir_path2, output_path, keep_temp_files=False):
+    @staticmethod
+    def is_thresholds_ascending(thresholds):
         """
-        1. Change 1's name space
-        2. merge 1 to 2
+        Check if the thresholds array is in ascending order
         """
-        os.system(f"{self.replace_exec_path} @vars. @replace. {mlir_path1} > {mlir_path1}.tmp")
-        os.system(f"cp {mlir_path2} {mlir_path2}.tmp")
-        os.system(f"{self.merge_exec_path} {mlir_path1}.tmp {mlir_path2}.tmp > {output_path}")
-        if not keep_temp_files:
-            os.system(f"rm {mlir_path1}.tmp")
-            os.system(f"rm {mlir_path2}.tmp")
-            
-            
+        if len(thresholds) <= 1:
+            return True
+
+        for i in range(1, len(thresholds)):
+            if thresholds[i] <= thresholds[i - 1]:
+                return False
+        return True
+    
+    @staticmethod
+    def modify_mlir_file(self, key, value, func_name, param_type, param_index, mlir_file_path):
+        """
+        Modify the MLIR file based on the configuration parameter
+        """
+        # Read the current MLIR file
+        with open(mlir_file_path, "r") as f:
+            mlir_content = f.read()
+
+        # Find the specific function annotation
+        pattern = rf'"approxMLIR\.util\.annotation\.decision_tree"\(\) <\{{[^}}]*func_name = "{func_name}"[^}}]*\}}'
+        match = re.search(pattern, mlir_content, re.DOTALL)
+        print("match: ", match)
+        if match:
+            annotation_content = match.group(0)
+            modified = False
+
+            if param_type == "threshold":
+                # Modify thresholds array
+                # Find the thresholds array for this function
+                thresholds_pattern = rf"thresholds = array<i32: ([^>]+)>"
+                thresholds_match = re.search(thresholds_pattern, annotation_content)
+
+                if thresholds_match:
+                    thresholds_str = thresholds_match.group(1)
+                    thresholds = [int(x.strip()) for x in thresholds_str.split(",")]
+
+                    # Update the specific threshold at the given index
+                    if param_index < len(thresholds):
+                        thresholds[param_index] = value
+
+                        # Check if thresholds array is in ascending order
+                        if not self.is_thresholds_ascending(thresholds):
+                            print(
+                                f"ERROR: Thresholds array is not in ascending order: {thresholds}"
+                            )
+                            return (
+                                False  # Return False to indicate validation failure
+                            )
+
+                        new_thresholds_str = ", ".join(map(str, thresholds))
+
+                        # Replace in the annotation content using regex to be more specific
+                        # This ensures we only replace the thresholds array in this specific annotation
+                        thresholds_regex = (
+                            rf"thresholds = array<i32: {re.escape(thresholds_str)}>"
+                        )
+                        new_thresholds_line = (
+                            f"thresholds = array<i32: {new_thresholds_str}>"
+                        )
+                        annotation_content = re.sub(
+                            thresholds_regex,
+                            new_thresholds_line,
+                            annotation_content,
+                        )
+                        modified = True
+
+            elif param_type == "decision":
+                # Modify decisions array
+                decisions_pattern = rf"decisions = array<i32: ([^>]+)>"
+                decisions_match = re.search(decisions_pattern, annotation_content)
+
+                if decisions_match:
+                    decisions_str = decisions_match.group(1)
+                    decisions = [int(x.strip()) for x in decisions_str.split(",")]
+
+                    # Update the specific decision at the given index
+                    if param_index < len(decisions):
+                        decisions[param_index] = value
+                        new_decisions_str = ", ".join(map(str, decisions))
+
+                        # Replace in the annotation content using regex to be more specific
+                        # This ensures we only replace the decisions array in this specific annotation
+                        decisions_regex = (
+                            rf"decisions = array<i32: {re.escape(decisions_str)}>"
+                        )
+                        new_decisions_line = (
+                            f"decisions = array<i32: {new_decisions_str}>"
+                        )
+                        annotation_content = re.sub(
+                            decisions_regex, new_decisions_line, annotation_content
+                        )
+                        modified = True
+
+            if modified:
+                # Replace the entire annotation in the MLIR content
+                mlir_content = mlir_content.replace(
+                    match.group(0), annotation_content
+                )
+
+                # Write the modified content back to the file
+                with open(mlir_file_path, "w") as f:
+                    f.write(mlir_content)
+
+                print(f"Successfully modified MLIR file: {key} = {value}")
+            else:
+                print(f"Could not modify parameter {key} in MLIR file")
+        else:
+            print(f"Could not find function {func_name} in MLIR file")
 
      
             
 if __name__ == "__main__":
-    replace_exec_path = "../../external-tools/approx/replace"
-    merge_exec_path = "../../external-tools/approx/merge"
-    opt_exec_path = "../../build/bin/approxMLIR-opt"
-    mlir_path1 = "./approx.mlir"
-    mlir_path2 = "./exact.mlir"
-    output_path = "./merged.mlir"
-    toolbox = ToolBox(replace_exec_path, merge_exec_path, opt_exec_path)
-    toolbox.write2file_auxiliary_mlir_str("./auxiliary.mlir")
-    toolbox.link_mlir_modules("./auxiliary.mlir", mlir_path1, "./ext.mlir", keep_temp_files=True)
-    toolbox.link_mlir_modules("./ext.mlir", mlir_path2, output_path, keep_temp_files=True)
-    toolbox.optimize_mlir(output_path, "./output.mlir")
+    pass
     
-    
-# ---------- quick example ----------
-
-# if __name__ == "__main__":
-#     # Example usage
-#     example = '''
-# module {
-#   func.func @main(%arg0: tensor<1x4xi32>) -> tensor<1x4xi32> {
-#     %0 = call @helper(%arg0) : (tensor<1x4xi32>) -> tensor<1x4xi32>
-#     return %0 : tensor<1x4xi32>
-#   }
-#   func.func @helper(%x: tensor<1x4xi32>) -> tensor<1x4xi32> {
-#     // ...
-#     return %x : tensor<1x4xi32>
-#   }
-# }
-# '''.strip()
-
-#     renamed = rename_mlir_functions(example, number=7)
-#     print(renamed)
-
-#     # Merging (after renaming both sides):
-#     modA = rename_mlir_functions(example, number=1)
-#     modB = rename_mlir_functions(example, number=2)
-#     merged = merge_mlir_modules(modA, modB)
-#     print(merged)
