@@ -7,9 +7,10 @@ import subprocess
 import re
 
 class ApproxMLIRSDK:
-    def __init__(self, binary_path, mlir_path):
+    def __init__(self, binary_path, mlir_path, compilation_tool_path):
         self.binary_dir_path = binary_path
         self.mlir_dir_path = mlir_path
+        self.compilation_dir_path = compilation_tool_path
         
         # Ensure the binary and MLIR directories exist
         os.makedirs(self.binary_dir_path, exist_ok=True)
@@ -42,17 +43,44 @@ class ApproxMLIRSDK:
             mlir_files = [os.path.join(self.mlir_dir_path, f) for f in all_files if f.endswith('.mlir')]
             return mlir_files
     
-    def move_to_binaries(self, file_path, template_name="approx_kmeans.mlir"):
+    def compile_mlir(self, file_path):
         """
-            After you generate a test.exec, you must move them to binary directory so LLM workflow can use them.
+            file_path is the MLIR file path, whose compiled artifact will be moved to <binary directory>/<appropriate binary name>
+            The return value is the compiled executable path.
         """
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Source file not found: {file_path}")
-            
-        base_name = os.path.splitext(template_name).split('_')[1]
-        destination_path = os.path.join(self.binary_dir_path, base_name)
         
-        shutil.move(file_path, destination_path)
+        gcc_cmd = [
+            f"{self.compilation_dir_path}/build/bin/polygeist-opt",
+            self.args.mlir_file,
+            "-pre-emit-transform",
+            "-emit-approx",
+            "-config-approx",
+            "-transform-approx",
+            "-o",
+            f"./test.mlir",
+        ]
+
+        compile_result = self.call_program(gcc_cmd)
+        assert compile_result["returncode"] == 0
+
+        cmd = [
+            f"{self.compilation_dir_path}/build/bin/cgeist",
+            f"-resource-dir={self.compilation_dir_path}/llvm-project/build/lib/clang/18",
+            "-I",
+            f"{self.compilation_dir_path}/tools/cgeist/Test/polybench/utilities",
+            "-lm",
+            "test.mlir",
+            "-import-mlir",
+            "-o",
+            f"./test.exec",
+        ]
+        base_name = os.path.basename(file_path)
+        exec_name = os.path.splitext(base_name).split('_')[1]
+        destination_path = os.path.join(self.binary_dir_path, exec_name)
+        
+        shutil.move("./test.exec", destination_path)
         return destination_path
     
     def populate_orchestration_knobs(self, num_knobs, template_name="approx_choose.mlir"):
