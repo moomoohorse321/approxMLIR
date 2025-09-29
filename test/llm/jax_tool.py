@@ -4,9 +4,9 @@ import re
 from typing import Callable, List, Optional, Any, Tuple, Set
 import csv
 import time
-from approxMLIR import ToolBox
+from approxMLIR import ApproxMLIRSDK
 
-sdk = ApproxMLIRSDK('./bin', './mlir')
+sdk: ApproxMLIRSDK = ApproxMLIRSDK('./bin', './mlir', '')
 
 # Set JAX to use GPU memory if available.
 # This is based on the provided notebook.
@@ -209,50 +209,50 @@ def acc_siebel_college(answer: str) -> float:
 
 questions_to_run = [
     # --- Blackscholes Questions ---
-    Question(
-        text="Calculate the prices for the options listed in 'data/input.bin' and write the results to 'data/out.txt'. What is the average prices of all the options?",
-        accuracy_fn=acc_blackscholes_avg
-    ),
-    Question(
-        text="I need to price a batch of 10000000 financial options from 'data/input.bin' and save them. What is the maximum price of the first 10 options?",
-        accuracy_fn=acc_blackscholes_max_10
-    ),
-    # --- KMeans Questions ---
-    Question(
-        text="I have 1000000 data points that I need to group into 10 distinct clusters. Can you compute the 10 centroids?",
-        accuracy_fn=acc_kmeans_centroids
-    ),
-    Question(
-        text="What is the left most centroid among the 10 centroids of the input file. The input file has 1000000 nodes.",
-        accuracy_fn=acc_kmeans_leftmost
-    ),
+    # Question(
+    #     text="Calculate the prices for the options listed in 'data/input.bin' and write the results to 'data/out.txt'. What is the average prices of all the options?",
+    #     accuracy_fn=acc_blackscholes_avg
+    # ),
+    # Question(
+    #     text="I need to price a batch of 10000000 financial options from 'data/input.bin' and save them. What is the maximum price of the first 10 options?",
+    #     accuracy_fn=acc_blackscholes_max_10
+    # ),
+    # # --- KMeans Questions ---
+    # Question(
+    #     text="I have 1000000 data points that I need to group into 10 distinct clusters. Can you compute the 10 centroids?",
+    #     accuracy_fn=acc_kmeans_centroids
+    # ),
+    # Question(
+    #     text="What is the left most centroid among the 10 centroids of the input file. The input file has 1000000 nodes.",
+    #     accuracy_fn=acc_kmeans_leftmost
+    # ),
     # --- LavaMD Questions ---
-    Question(
-        text="Run a molecular dynamics simulation for a system containing 10 particles dictated by input files, what's their average energy.",
-        accuracy_fn=acc_lavamd_avg_energy
-    ),
+    # Question(
+    #     text="Run a molecular dynamics simulation for a system containing 10 particles dictated by input files, what's their average energy.",
+    #     accuracy_fn=acc_lavamd_avg_energy
+    # ),
     Question(
         text="How would I simulate the molecular movement of 12 random particles using the available tools?",
         accuracy_fn=lambda a: 1.0 if 'lavaMD(-boxes1d,12)' in a.replace(" ", "") else 0.0
     ),
     # --- PageRank Questions ---
-    Question(
-        text="I need to calculate the PageRank for a network of 500000 web pages. What's the largest rank?",
-        accuracy_fn=acc_pagerank_max
-    ),
-    Question(
-        text="Rank 1000000 websites based on their importance in a network, what are the top 10 pages?",
-        accuracy_fn=acc_pagerank_top_10
-    ),
-    # -- Non-tool questions ---- 
-    Question(
-        text="What's the sum of 2 + 5 + 10 + 3 + number of letter 'g' in the word 'piggy'.",
-        accuracy_fn=acc_sum_puzzle
-    ),
-    Question(
-        text="Where did Thomas Siebel go to college?",
-        accuracy_fn=acc_siebel_college
-    )
+    # Question(
+    #     text="I need to calculate the PageRank for a network of 500000 web pages. What's the largest rank?",
+    #     accuracy_fn=acc_pagerank_max
+    # ),
+    # Question(
+    #     text="Rank 1000000 websites based on their importance in a network, what are the top 10 pages?",
+    #     accuracy_fn=acc_pagerank_top_10
+    # ),
+    # # -- Non-tool questions ---- 
+    # Question(
+    #     text="What's the sum of 2 + 5 + 10 + 3 + number of letter 'g' in the word 'piggy'.",
+    #     accuracy_fn=acc_sum_puzzle
+    # ),
+    # Question(
+    #     text="Where did Thomas Siebel go to college?",
+    #     accuracy_fn=acc_siebel_college
+    # )
 ]
 
 class LLMManager:
@@ -300,6 +300,7 @@ class LLMManager:
                 self.sampler.append(gm.text.ChatSampler(
                     model=self.model[i],
                     params=self.params[i],
+                    multi_turn=False
                 ))
         except Exception as e:
             print(f"Error loading model: {e}")
@@ -311,7 +312,7 @@ class LLMManager:
         Generates a response from the LLM given a prompt.
         This is the core function to be replaced by your compiled artifact's inference call.
         """
-        
+        print(f"model used is {self.model_used}")
         # Using multi_turn=False to ensure each generation is independent
         reply = self.sampler[self.model_used].chat(prompt, multi_turn=False, print_stream=False)
         return reply
@@ -372,8 +373,12 @@ def organize_and_run_agent(question: Question, tools: List[Tool], llm: LLMManage
     3.  LLM generates a final answer based on the tool's output.
     4.  The answer's accuracy is calculated.
     """
+    # Step 0: initialize the setup.
     generation_time = 0
     tool_time = 0
+    ill_formed_answer = 0
+    llm.model_used = 1
+    
     # Step 1: Create a prompt for the LLM to choose a tool.
     tool_descriptions = "\n".join([f"- {t.name}: {t.description}" for t in tools])
     tool_selection_prompt = f"""
@@ -381,24 +386,10 @@ You have access to the following tools:
 {tool_descriptions}
 
 Your task is to answer the user's question. First, decide if a tool needs to be invoked. A tool needs to be invoked only if its output can help answer the question.
-If so, respond with ONLY the command to call the tool.
-Also compute a score out of 5 for necessity of using a tool.
+If so, respond with the command to call the tool and a score out of 5 for necessity of using a tool in the following format:
 
-For example if there are 3 tools:
-
-- X: Calculator. Usage: X(1, <input_path>, <output_path>)
-- Y: Info retriever. Usage Y(-k, <number of clusers>, -n, <number of nodes>)
-- Z: Physics simulator. Usage Z(-boxes1d, <number of particles>)
-
-A possible answer to "calculate x + y, x in ./x.txt y in ./y.txt" can be 
-
-cmd = X(1, ./x.txt, ./y.txt)
-necessity = 3
-
-A possible answer to "What is UIUC?" can be 
-
-cmd = No tool is needed.
-necessity = 0
+command = ....
+necessity = ....
 
 Question: {question.text}
 """
@@ -413,7 +404,7 @@ Question: {question.text}
     print(f"\nLLM Tool Choice: {llm_tool_choice}")
     
     # Use regex to find 'cmd = ...' line, ignoring case
-    cmd_match = re.search(r"cmd\s*=\s*(.*)", llm_tool_choice, re.IGNORECASE)
+    cmd_match = re.search(r"command\s*=\s*(.*)", llm_tool_choice, re.IGNORECASE)
     if cmd_match:
         command_str = cmd_match.group(1).strip()
 
@@ -421,14 +412,14 @@ Question: {question.text}
     nec_match = re.search(r"necessity\s*=\s*(\d+)", llm_tool_choice, re.IGNORECASE)
     if nec_match:
         necessity_score = int(nec_match.group(1))
-        
-    # call the knob
-    
+    else:
+        necessity_score = 3
+        ill_formed_answer += 1
 
     # Step 2: Invoke the tool
     tool_output = ""
     # Check if the model explicitly stated no tool is needed.
-    if sdk.get_knob_val(1, necessity_score):
+    if sdk.get_knob_val(1, necessity_score) == 1:
         print("LLM decided no tool was needed.")
         # The final prompt will use this context.
         context_from_tool = ""
@@ -443,13 +434,16 @@ Question: {question.text}
         context_from_tool = f'To help answer your question, you have received the following information from a tool: "{tool_output}"'
 
         summarize_tool_output_prompt = f"""
+        You must summarize the output of the tool and also compute how useful the output is to answer the question in the following format:
+        
+        summary = ...
+        usefulness = <out of 5>
+        
         Question: {question.text}
 
         {context_from_tool}
         
-        You must summarize the output such that the info that's related to the question is kept. 
-        
-        You must also compute a number in fomrat of "usefulness = <how useful the tool output is>" suggesting if the tool's output is useful or not.
+        Your answer:
     """
 
         start_time = time.time()
@@ -457,9 +451,12 @@ Question: {question.text}
         context_from_tool = f"To help answer your question, you have received the following information from a tool: {summary}"
         generation_time += time.time() - start_time
         
-        useful_match = re.search(r"usefulness\s*=\s*(\d+)", llm_tool_choice, re.IGNORECASE)
+        useful_match = re.search(r"usefulness\s*=\s*(\d+)", summary, re.IGNORECASE)
         if useful_match:
             usefulness_score = int(useful_match.group(1))
+        else:
+            useful_match = 3
+            ill_formed_answer += 1
 
     # Step 3: Generate the final answer using the tool's context
     final_answer_prompt = f"""
@@ -490,6 +487,8 @@ Final Answer:
     # Step 4: Compute accuracy
     accuracy = question.accuracy_fn(final_answer)
     print(f"Computed Accuracy: {accuracy:.2f}")
+    print(f"Performance: {tool_time + generation_time:.2f}")
+    print(f"Ill-formed answer: {ill_formed_answer}")
     
     return accuracy, tool_time + generation_time
 
