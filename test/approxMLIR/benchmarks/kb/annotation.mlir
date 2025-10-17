@@ -2,7 +2,7 @@
     func_name = "parse_embedding",
     transform_type = "func_substitute",
     num_thresholds = 1 : i32,
-    thresholds_uppers = array<i32: 4>,
+    thresholds_uppers = array<i32: 10>,
     thresholds_lowers = array<i32: 1>,
     decision_values = array<i32: 0, 1, 2>,
     thresholds = array<i32: 1>,
@@ -19,7 +19,7 @@ transform_type = "func_substitute",
 num_thresholds = 1 : i32,
 thresholds_uppers = array<i32: 5>,
 thresholds_lowers = array<i32: 1>,
-decision_values = array<i32: 0, 1, 2, 3>,
+decision_values = array<i32: 0, 1, 2>,
 thresholds = array<i32: 2>,
 decisions = array<i32: 0, 1>
 }> : () -> ()
