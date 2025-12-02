@@ -16,3 +16,5 @@ test/python/*.png
 test/python/*/
 test/llm/*.mlir
 test/llm/bin
+
+llvm-project/build
