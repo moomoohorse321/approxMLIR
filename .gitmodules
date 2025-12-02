@@ -1,3 +1,6 @@
 [submodule "llvm-project"]
 	path = llvm-project
 	url = git@github.com:llvm/llvm-project.git
+[submodule "external-dialects/stablehlo"]
+	path = external-dialects/stablehlo
+	url = git@github.com:iree-org/stablehlo.git
