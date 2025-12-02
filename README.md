@@ -9,10 +9,10 @@ git submodule update --init --recursive --progress
 mkdir llvm-project/build
 cd llvm-project/build
 cmake -G Ninja ../llvm \
-  -DLLVM_ENABLE_PROJECTS="mlir;clang" \
+  -DLLVM_ENABLE_PROJECTS="mlir" \
   -DLLVM_TARGETS_TO_BUILD="host" \
   -DLLVM_ENABLE_ASSERTIONS=ON \
-  -DCMAKE_BUILD_TYPE=DEBUG 
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo 
 ninja
 ninja check-mlir
 ```

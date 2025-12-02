@@ -158,9 +158,9 @@ struct PreEmitTransformationPass
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
     GreedyRewriteConfig config;
-    config.maxIterations = 1; // to debug
+    config.setMaxIterations(1);
     patterns.add<PreEmitFuncConversion>(&getContext());
-    (void)(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns)), config);
+    (void)(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns), config));
   }
 };
 } // namespace

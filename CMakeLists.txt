@@ -93,13 +93,13 @@ endif()
 
 add_subdirectory(approxMLIR-opt)
 
-if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-  # Configure torch-mlir - disable Python and tests
-  # Force disable StableHLO in torch-mlir
-  set(TORCH_MLIR_ENABLE_STABLEHLO OFF CACHE BOOL "Disable StableHLO dialect in Torch-MLIR" FORCE)
-  set(TORCH_MLIR_ENABLE_TESTS OFF CACHE BOOL "Disable torch-mlir tests")
-  set(TORCH_MLIR_ENABLE_PYTHON_BINDINGS OFF CACHE BOOL "Disable Python bindings for Torch-MLIR")
-  set(TORCH_MLIR_ENABLE_JIT_IR_IMPORTER OFF CACHE BOOL "Disable JIT IR importer")
-  set(TORCH_MLIR_ENABLE_PYTORCH_EXTENSIONS OFF CACHE BOOL "Disable PyTorch extensions")
-  add_subdirectory(external-dialects/torch-mlir)
-endif()
+# if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+#   # Configure torch-mlir - disable Python and tests
+#   # Force disable StableHLO in torch-mlir
+#   set(TORCH_MLIR_ENABLE_STABLEHLO OFF CACHE BOOL "Disable StableHLO dialect in Torch-MLIR" FORCE)
+#   set(TORCH_MLIR_ENABLE_TESTS OFF CACHE BOOL "Disable torch-mlir tests")
+#   set(TORCH_MLIR_ENABLE_PYTHON_BINDINGS OFF CACHE BOOL "Disable Python bindings for Torch-MLIR")
+#   set(TORCH_MLIR_ENABLE_JIT_IR_IMPORTER OFF CACHE BOOL "Disable JIT IR importer")
+#   set(TORCH_MLIR_ENABLE_PYTORCH_EXTENSIONS OFF CACHE BOOL "Disable PyTorch extensions")
+#   add_subdirectory(external-dialects/torch-mlir)
+# endif()

@@ -138,7 +138,7 @@ struct EmitErrorKnobs
     Block &block = funcOp.getBody().front();
     BlockArgument state = block.getArguments().back();
     // Check if the state is of the expected type (e.g., i32)
-    if (!state.getType().isa<IntegerType>()) {
+    if (!isa<IntegerType>(state.getType())) {
       funcOp.emitError(
           "Expected the last argument to be of type i32 for state.");
       return nullptr;
@@ -344,9 +344,9 @@ struct EmitApproxPass : public impl::EmitApproxPassBase<EmitApproxPass> {
 
     RewritePatternSet patterns(&getContext());
     patterns.add<EmitErrorKnobs>(&getContext());
-    // GreedyRewriteConfig config;
-    // config.maxIterations = 1;
-    (void)(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns)));
+    GreedyRewriteConfig config;
+    config.setMaxIterations(1);
+    (void)(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns), config));
   }
 };
 } // namespace

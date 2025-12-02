@@ -448,8 +448,8 @@ struct TransformApproxPass
     patterns.add<LoopPerforation>(&getContext());
     patterns.add<TaskSkipping>(&getContext());
     GreedyRewriteConfig config;
-    config.maxIterations = 1; // to debug
-    (void)(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns),config)); // apply the patterns to the operation
+    config.setMaxIterations(1);
+    (void)(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns), config)); // apply the patterns to the operation
   }
 };
 } // namespace
