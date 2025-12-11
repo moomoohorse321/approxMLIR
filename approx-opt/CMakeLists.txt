@@ -6,8 +6,8 @@ set(LIBS
         ${conversion_libs}
         ${extension_libs}
         MLIROptLib
-        MLIRapproxMLIR
-        MLIRApproxMLIRTransforms
+        MLIRapprox
+        MLIRApproxTransforms
         
         StablehloRegister
         StablehloTestUtils
@@ -15,8 +15,8 @@ set(LIBS
         InterpreterOps
         StablehloTOSATransforms
 )
-add_llvm_executable(approxMLIR-opt approxMLIR-opt.cpp)
+add_llvm_executable(approx-opt approx-opt.cpp)
 
-llvm_update_compile_flags(approxMLIR-opt)
-target_link_libraries(approxMLIR-opt PRIVATE ${LIBS})
+llvm_update_compile_flags(approx-opt)
+target_link_libraries(approx-opt PRIVATE ${LIBS})
 

@@ -1,1 +1,1 @@
-add_subdirectory(approxMLIR)
+add_subdirectory(approx)

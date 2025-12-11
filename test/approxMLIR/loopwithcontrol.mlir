@@ -1,4 +1,4 @@
-// RUN: approxMLIR-opt %s > %S/%basename.mlir
+// RUN: approx-opt %s > %S/%basename.mlir
 
 module {
 

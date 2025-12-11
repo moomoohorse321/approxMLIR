@@ -5,15 +5,15 @@ configure_lit_site_cfg(
         ${CMAKE_CURRENT_SOURCE_DIR}/lit.cfg.py
 )
 
-set(APPROXMLIR_OPT_TEST_DEPENDS
+set(APPROX_OPT_TEST_DEPENDS
         FileCheck count not
-        approxMLIR-opt
+        approx-opt
         )
 
-add_lit_testsuite(check-approxMLIR-opt "Running the approxMLIR-opt regression tests"
+add_lit_testsuite(check-approx-opt "Running the approx-opt regression tests"
         ${CMAKE_CURRENT_BINARY_DIR}
-        DEPENDS ${APPROXMLIR_OPT_TEST_DEPENDS}
+        DEPENDS ${APPROX_OPT_TEST_DEPENDS}
         )
-set_target_properties(check-approxMLIR-opt PROPERTIES FOLDER "Tests")
+set_target_properties(check-approx-opt PROPERTIES FOLDER "Tests")
 
-add_lit_testsuites(APPROXMLIR_OPT ${CMAKE_CURRENT_SOURCE_DIR} DEPENDS ${APPROXMLIR_OPT_TEST_DEPENDS})
+add_lit_testsuites(APPROX_OPT ${CMAKE_CURRENT_SOURCE_DIR} DEPENDS ${APPROX_OPT_TEST_DEPENDS})

@@ -14,22 +14,22 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
-#include "approxMLIR/Passes/Passes.h"
-#include "approxMLIR/Passes/Utils.h"
+#include "approx/Passes/Passes.h"
+#include "approx/Passes/Utils.h"
 #include "llvm/ADT/STLExtras.h"
 #include <memory>
 // queue
 #include <queue>
 
 using namespace mlir;
-using namespace approxMLIR;
+using namespace approx;
 
 namespace mlir {
-using namespace approxMLIR;
+using namespace approx;
 
 namespace {
 #define GEN_PASS_DEF_PREEMITTRANSFORMATIONPASS
-#include "approxMLIR/Passes/Passes.h.inc"
+#include "approx/Passes/Passes.h.inc"
 
 [[maybe_unused]]  static void dump_region(Region *region) {
   for (Block &block : region->getBlocks())
@@ -38,9 +38,9 @@ namespace {
 
 
 struct PreEmitFuncConversion
-    : public OpRewritePattern<approxMLIR::utilAnnotationConvertToCallOp> {
+    : public OpRewritePattern<approx::utilAnnotationConvertToCallOp> {
   using OpRewritePattern<
-      approxMLIR::utilAnnotationConvertToCallOp>::OpRewritePattern;
+      approx::utilAnnotationConvertToCallOp>::OpRewritePattern;
 
   static void eraseRegion(Region *region, PatternRewriter &rewriter) {
     std::queue<Block *> blocksToErase;
@@ -129,7 +129,7 @@ struct PreEmitFuncConversion
   }
   
   LogicalResult
-  matchAndRewrite(approxMLIR::utilAnnotationConvertToCallOp annotationOp,
+  matchAndRewrite(approx::utilAnnotationConvertToCallOp annotationOp,
                   PatternRewriter &rewriter) const final {
     StringRef func_name = annotationOp.getFuncName();
     Region *parentRegion = annotationOp->getParentRegion();
@@ -168,7 +168,7 @@ struct PreEmitTransformationPass
 } // namespace mlir
 
 namespace mlir {
-namespace approxMLIR {
+namespace approx {
 
 std::unique_ptr<Pass> createPreEmitTransformationPass() {
   return std::make_unique<PreEmitTransformationPass>();
@@ -177,5 +177,5 @@ std::unique_ptr<Pass> createPreEmitTransformationPass() {
 // void registerPreEmitTransformationPass() {
 //   PassRegistration<PreEmitTransformationPass>();
 // }
-} // namespace approxMLIR
+} // namespace approx
 } // namespace mlir

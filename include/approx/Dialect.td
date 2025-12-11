@@ -1,4 +1,4 @@
-//===- approxMLIRDialect.td - approxMLIR dialect -----------*- tablegen -*-===//
+//===- approxDialect.td - approx dialect -----------*- tablegen -*-===//
 //
 // This file is licensed under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,32 +6,32 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef APPROXMLIR_DIALECT
-#define APPROXMLIR_DIALECT
+#ifndef APPROX_DIALECT
+#define APPROX_DIALECT
 
 include "mlir/IR/OpBase.td"
 include "mlir/IR/EnumAttr.td"
 include "mlir/IR/AttrTypeBase.td"
 
 //===----------------------------------------------------------------------===//
-// approxMLIR dialect definition.
+// approx dialect definition.
 //===----------------------------------------------------------------------===//
 
-def approxMLIR_Dialect : Dialect {
-    let name = "approxMLIR";
-    let summary = "A approxMLIR out-of-tree MLIR dialect.";
+def approx_Dialect : Dialect {
+    let name = "approx";
+    let summary = "approx, an out-of-tree MLIR dialect.";
     let description = [{
-        The approxMLIR will contains Ops to represent approximate transformation metadata.
+        The approx dialect will contains Ops to represent approximate transformation metadata.
         Such metadata will be used to guide the approximate transformation of the MLIR graph and out-of-tree analysis (e.g. reliability analysis).
     }];
-    let cppNamespace = "::mlir::approxMLIR";
+    let cppNamespace = "::mlir::approx";
 }
 
 //===----------------------------------------------------------------------===//
-// Base approxMLIR operation definition.
+// Base approx operation definition.
 //===----------------------------------------------------------------------===//
 
-class approxMLIR_Op<string mnemonic, list<Trait> traits = []> :
-        Op<approxMLIR_Dialect, mnemonic, traits>;
+class approx_Op<string mnemonic, list<Trait> traits = []> :
+        Op<approx_Dialect, mnemonic, traits>;
 
-#endif // APPROXMLIR_DIALECT
+#endif // APPROX_DIALECT

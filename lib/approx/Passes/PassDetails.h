@@ -14,23 +14,23 @@
 // clang-tidy seems to expect the absolute path in the header guard on some
 // systems, so just disable it.
 // NOLINTNEXTLINE(llvm-header-guard)
-#ifndef DIALECT_APPROXMLIR_TRANSFORMS_PASSDETAILS_H
-#define DIALECT_APPROXMLIR_TRANSFORMS_PASSDETAILS_H
+#ifndef DIALECT_APPROX_TRANSFORMS_PASSDETAILS_H
+#define DIALECT_APPROX_TRANSFORMS_PASSDETAILS_H
 
 #include "mlir/Pass/Pass.h"
-#include "approxMLIR/Ops.h"
-#include "approxMLIR/Passes/Passes.h"
+#include "approx/Ops.h"
+#include "approx/Passes/Passes.h"
 
 namespace mlir {
 // Forward declaration from Dialect.h
 template <typename ConcreteDialect>
 void registerDialect(DialectRegistry &registry);
-namespace approxMLIR {
+namespace approx {
 
-class approxMLIRDialect;
+class approxDialect;
 
 #define GEN_PASS_CLASSES
-#include "approxMLIR/Passes/Passes.h.inc"
+#include "approx/Passes/Passes.h.inc"
 
 } // namespace polygeist
 } // namespace mlir

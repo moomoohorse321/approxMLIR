@@ -33,30 +33,30 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 
-#include "approxMLIR/Passes/Passes.h"
-#include "approxMLIR/Passes/Utils.h"
+#include "approx/Passes/Passes.h"
+#include "approx/Passes/Utils.h"
 #include "llvm/ADT/STLExtras.h"
 #include <memory>
 // queue
 #include <queue>
 
 using namespace mlir;
-using namespace approxMLIR;
+using namespace approx;
 
 namespace mlir {
-using namespace approxMLIR;
+using namespace approx;
 
 namespace {
 #define GEN_PASS_DEF_TRANSFORMAPPROXPASS
-#include "approxMLIR/Passes/Passes.h.inc"
+#include "approx/Passes/Passes.h.inc"
 
 [[maybe_unused]]  static void dump_region(Region *region) {
   for (Block &block : region->getBlocks())
     block.dump();
 }
 
-struct FunctionSubstitution : public OpRewritePattern<approxMLIR::transformOp> {
-  using OpRewritePattern<approxMLIR::transformOp>::OpRewritePattern;
+struct FunctionSubstitution : public OpRewritePattern<approx::transformOp> {
+  using OpRewritePattern<approx::transformOp>::OpRewritePattern;
   // if there is an Op called approx_<name> in the module, we can replace it.
   static func::FuncOp findReplacingFunc(func::FuncOp funcOp, Region *parentRegion, int approx_knob_num) {
     func::FuncOp approxFunc = nullptr;
@@ -74,14 +74,14 @@ struct FunctionSubstitution : public OpRewritePattern<approxMLIR::transformOp> {
   }
 
   /**
-   * This is the rewrite rule for "approxMLIR.transform"() <{knob_val = 1 : i32,
+   * This is the rewrite rule for "approx.transform"() <{knob_val = 1 : i32,
    * transform_type = "func_substitute"}> : () -> () For each function, we look at
    * the module to find its approximate version (e.g. a NN model). Currently the NN
    * model will be named as approx_<original function name>_<approx kernel number>. We simply erase the
    * body and inline the body of the approximate function. (The approx function
    * shouldn't be moved)
    */
-  LogicalResult matchAndRewrite(approxMLIR::transformOp transformOp,
+  LogicalResult matchAndRewrite(approx::transformOp transformOp,
                                 PatternRewriter &rewriter) const final {
     StringRef transformType = transformOp.getTransformType();
 
@@ -141,8 +141,8 @@ struct FunctionSubstitution : public OpRewritePattern<approxMLIR::transformOp> {
   }
 };
 
-struct LoopPerforation : public OpRewritePattern<approxMLIR::transformOp> {
-  using OpRewritePattern<approxMLIR::transformOp>::OpRewritePattern;
+struct LoopPerforation : public OpRewritePattern<approx::transformOp> {
+  using OpRewritePattern<approx::transformOp>::OpRewritePattern;
 
 private:
   /**
@@ -197,7 +197,7 @@ public:
    * The current policy is:
    * actual stride = original stride * decision_val
    */
-  LogicalResult matchAndRewrite(approxMLIR::transformOp transformOp,
+  LogicalResult matchAndRewrite(approx::transformOp transformOp,
                                 PatternRewriter &rewriter) const final {
     
     // Check if this is a loop perforation transformation
@@ -244,8 +244,8 @@ public:
   }
 };
 
-struct TaskSkipping : public OpRewritePattern<approxMLIR::transformOp> {
-  using OpRewritePattern<approxMLIR::transformOp>::OpRewritePattern;
+struct TaskSkipping : public OpRewritePattern<approx::transformOp> {
+  using OpRewritePattern<approx::transformOp>::OpRewritePattern;
 
 private:
    /**
@@ -400,7 +400,7 @@ private:
   }
 
 public:
-  LogicalResult matchAndRewrite(approxMLIR::transformOp transformOp,
+  LogicalResult matchAndRewrite(approx::transformOp transformOp,
                                 PatternRewriter &rewriter) const final {
     
     // Check if this is a task skipping transformation
@@ -457,12 +457,12 @@ struct TransformApproxPass
 } // namespace mlir
 
 namespace mlir {
-namespace approxMLIR {
+namespace approx {
 
 std::unique_ptr<Pass> createTransformApproxPass() {
   return std::make_unique<TransformApproxPass>();
 }
 
 // void registerTransformApproxPass() { PassRegistration<TransformApproxPass>(); }
-} // namespace approxMLIR
+} // namespace approx
 } // namespace mlir

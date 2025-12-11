@@ -50,7 +50,7 @@ llvm_config.with_environment('PATH', config.llvm_tools_dir, append_path=True)
 
 tool_dirs = [config.approxMLIR_tools_dir, config.llvm_tools_dir]
 tools = [
-    'approxMLIR-opt'
+    'approx-opt'
 ]
 
 llvm_config.add_tool_substitutions(tools, tool_dirs)

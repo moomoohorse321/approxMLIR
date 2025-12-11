@@ -13,8 +13,8 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 
-#include "approxMLIR/Passes/Passes.h"
-#include "approxMLIR/Passes/Utils.h"
+#include "approx/Passes/Passes.h"
+#include "approx/Passes/Utils.h"
 #include "llvm/ADT/STLExtras.h"
 #include <memory>
 // queue
@@ -23,34 +23,34 @@
 
 
 using namespace mlir;
-using namespace approxMLIR;
+using namespace approx;
 
 
 namespace mlir {
-using namespace approxMLIR;
+using namespace approx;
 
 namespace {
 #define GEN_PASS_DEF_CONFIGAPPROXPASS
-#include "approxMLIR/Passes/Passes.h.inc"
+#include "approx/Passes/Passes.h.inc"
 
 [[maybe_unused]] static void dump_region(Region *region) {
   for (Block &block : region->getBlocks())
     block.dump();
 }
 
-struct FinalizeDecisionTree : public OpRewritePattern<approxMLIR::yieldOp> {
+struct FinalizeDecisionTree : public OpRewritePattern<approx::yieldOp> {
   // the yield will be lowered to scf::yieldOp
-  using OpRewritePattern<approxMLIR::yieldOp>::OpRewritePattern;
+  using OpRewritePattern<approx::yieldOp>::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(approxMLIR::yieldOp yieldOp,
+  LogicalResult matchAndRewrite(approx::yieldOp yieldOp,
                                 PatternRewriter &rewriter) const final {
     rewriter.setInsertionPoint(yieldOp);
     rewriter.replaceOpWithNewOp<scf::YieldOp>(yieldOp, yieldOp.getOperands());
     return success();
   }
 };
-struct ConfigureDecisionTree : public OpRewritePattern<approxMLIR::decideOp> {
-  using OpRewritePattern<approxMLIR::decideOp>::OpRewritePattern;
+struct ConfigureDecisionTree : public OpRewritePattern<approx::decideOp> {
+  using OpRewritePattern<approx::decideOp>::OpRewritePattern;
 
   /**
    * Compute which region the state falls into based on thresholds
@@ -90,7 +90,7 @@ struct ConfigureDecisionTree : public OpRewritePattern<approxMLIR::decideOp> {
     return regionToDecision;
   }
 
-  LogicalResult matchAndRewrite(approxMLIR::decideOp decideOp,
+  LogicalResult matchAndRewrite(approx::decideOp decideOp,
                                 PatternRewriter &rewriter) const final {
     llvm::ArrayRef<int> thresholds = decideOp.getThresholds();
     llvm::ArrayRef<int> decisions = decideOp.getDecisions();
@@ -105,7 +105,7 @@ struct ConfigureDecisionTree : public OpRewritePattern<approxMLIR::decideOp> {
     Location loc = decideOp.getLoc();
     Value state = decideOp.getState();
     Operation *approxOp = decideOp->getParentOp();
-    auto knobOp = dyn_cast<approxMLIR::KnobOp>(approxOp);
+    auto knobOp = dyn_cast<approx::knobOp>(approxOp);
 
     assert(knobOp && "decisionOp must be inside KnobOp");
 
@@ -137,7 +137,7 @@ struct ConfigureDecisionTree : public OpRewritePattern<approxMLIR::decideOp> {
 
       // Insert the transform operation at the beginning of the case
       rewriter.setInsertionPointToStart(caseBlock);
-      rewriter.create<approxMLIR::transformOp>(loc, knobOp.getTransformType(), regionToDecision[i]);
+      rewriter.create<approx::transformOp>(loc, knobOp.getTransformType(), regionToDecision[i]);
 
       // Clone the entire knob body region
       rewriter.cloneRegionBefore(knobOp.getBody(), caseRegion,
@@ -155,7 +155,7 @@ struct ConfigureDecisionTree : public OpRewritePattern<approxMLIR::decideOp> {
     // Use a default decision value (you might want to handle this differently)
     rewriter.setInsertionPointToStart(defaultBlock);
     int defaultDecision = decisions.empty() ? 0 : decisions.front();
-    rewriter.create<approxMLIR::transformOp>(loc, knobOp.getTransformType(),
+    rewriter.create<approx::transformOp>(loc, knobOp.getTransformType(),
                                              defaultDecision);
 
     // Clone the knob body for default case
@@ -191,12 +191,12 @@ struct ConfigApproxPass : public impl::ConfigApproxPassBase<ConfigApproxPass> {
 
 
 namespace mlir{
-    namespace approxMLIR {
+    namespace approx {
         std::unique_ptr<Pass> createConfigApproxPass() {
             return std::make_unique<ConfigApproxPass>();
         }
         // void registerConfigApproxPass() {
         //     PassRegistration<ConfigApproxPass>();
         // }
-    } // namespace approxMLIR
+    } // namespace approx
 } // namespace mlir

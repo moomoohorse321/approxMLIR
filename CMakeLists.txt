@@ -11,7 +11,7 @@ endif()
 
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   message(STATUS "approx-opt out-of-tree (standalone) build.")
-  project(approxMLIR LANGUAGES CXX C)
+  project(approx LANGUAGES CXX C)
 
   set(CMAKE_CXX_STANDARD 17 CACHE STRING "C++ standard to conform to")
 
@@ -37,7 +37,7 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   message(STATUS "Using ClangConfig.cmake in: ${CLANG_DIR}")
   set(APPROX_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
   set(APPROX_BINARY_DIR ${CMAKE_SOURCE_DIR}/build)
-  set(APPROXMLIR_TABLEGEN_OUTPUT_DIR ${LLVM_BINARY_DIR}/tools/approxMLIR/include)
+  set(APPROX_TABLEGEN_OUTPUT_DIR ${LLVM_BINARY_DIR}/tools/approx/include)
 else ()
   set(LLVM_SOURCE_DIR ${LLVM_MAIN_SRC_DIR})
   set(MLIR_MAIN_SRC_DIR ${LLVM_MAIN_SRC_DIR}/../mlir)
@@ -48,9 +48,9 @@ else ()
   set(MLIR_TABLEGEN_EXE $<TARGET_FILE:mlir-tblgen>)
   set(MLIR_TABLEGEN_OUTPUT_DIR ${LLVM_BINARY_DIR}/tools/mlir/include)
   set(APPROX_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
-  set(APPROX_BINARY_DIR ${CMAKE_SOURCE_DIR}/build/approxMLIR)
-  set(APPROXMLIR_TABLEGEN_OUTPUT_DIR ${LLVM_BINARY_DIR}/tools/approxMLIR/include)
-  include_directories(${APPROXMLIR_TABLEGEN_OUTPUT_DIR})
+  set(APPROX_BINARY_DIR ${CMAKE_SOURCE_DIR}/build/approx)
+  set(APPROX_TABLEGEN_OUTPUT_DIR ${LLVM_BINARY_DIR}/tools/approx/include)
+  include_directories(${APPROX_TABLEGEN_OUTPUT_DIR})
 endif()
 
 function(append value)
@@ -91,7 +91,7 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 endif()
 
 
-add_subdirectory(approxMLIR-opt)
+add_subdirectory(approx-opt)
 
 # if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 #   # Configure torch-mlir - disable Python and tests

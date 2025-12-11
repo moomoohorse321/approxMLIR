@@ -1,4 +1,4 @@
-//===- approxMLIR-opt.cpp ---------------------------------------*- C++ -*-===//
+//===- approx-opt.cpp ---------------------------------------*- C++ -*-===//
 //
 // This file is licensed under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -20,9 +20,9 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
 
-#include "approxMLIR/Dialect.h"
-#include "approxMLIR/approxMLIROpsDialect.cpp.inc"
-#include "approxMLIR/Passes/Passes.h"
+#include "approx/Dialect.h"
+#include "approx/approxOpsDialect.cpp.inc"
+#include "approx/Passes/Passes.h"
 
 
 #include "stablehlo/conversions/tosa/transforms/Passes.h"
@@ -49,7 +49,7 @@ int main(int argc, char **argv) {
   mlir::registerAllExtensions(registry);
   mlir::stablehlo::registerAllDialects(registry);
   registry.insert<mlir::stablehlo::interpreter::InterpreterDialect>();
-  registry.insert<mlir::approxMLIR::approxMLIRDialect>();
+  registry.insert<mlir::approx::approxDialect>();
   registry.insert<mlir::func::FuncDialect>();
   registry.insert<mlir::arith::ArithDialect>();
   // Add the following to include *all* MLIR Core dialects, or selectively
@@ -57,5 +57,5 @@ int main(int argc, char **argv) {
   // will be *parsed* by the tool, not the one generated
   registerAllDialects(registry);
 
-  return mlir::asMainReturnCode(mlir::MlirOptMain(argc, argv, "approxMLIR optimizer driver\n", registry));
+  return mlir::asMainReturnCode(mlir::MlirOptMain(argc, argv, "approx optimizer driver\n", registry));
 }

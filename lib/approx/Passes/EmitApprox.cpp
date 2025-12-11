@@ -13,8 +13,8 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 
-#include "approxMLIR/Passes/Passes.h"
-#include "approxMLIR/Passes/Utils.h"
+#include "approx/Passes/Passes.h"
+#include "approx/Passes/Utils.h"
 #include "llvm/ADT/STLExtras.h"
 #include <memory>
 // set
@@ -22,13 +22,13 @@
 #include <queue>
 
 using namespace mlir;
-using namespace approxMLIR;
+using namespace approx;
 
 namespace mlir {
-using namespace approxMLIR;
+using namespace approx;
 namespace {
 #define GEN_PASS_DEF_EMITAPPROXPASS
-#include "approxMLIR/Passes/Passes.h.inc"
+#include "approx/Passes/Passes.h.inc"
 /**
  * https://mlir.llvm.org/docs/Tutorials/UnderstandingTheIRStructure/
  */
@@ -127,9 +127,9 @@ namespace {
   }
 }
 struct EmitErrorKnobs
-    : public OpRewritePattern<approxMLIR::utilAnnotationDecisionTreeOp> {
+    : public OpRewritePattern<approx::utilAnnotationDecisionTreeOp> {
   using OpRewritePattern<
-      approxMLIR::utilAnnotationDecisionTreeOp>::OpRewritePattern;
+      approx::utilAnnotationDecisionTreeOp>::OpRewritePattern;
       
   BlockArgument getState(func::FuncOp funcOp) const {
     if (funcOp.getFunctionType().getNumInputs() == 0) {
@@ -218,7 +218,7 @@ struct EmitErrorKnobs
   }
   
   LogicalResult
-  matchAndRewrite(approxMLIR::utilAnnotationDecisionTreeOp annotationOp,
+  matchAndRewrite(approx::utilAnnotationDecisionTreeOp annotationOp,
                   PatternRewriter &rewriter) const final {
     ModuleOp moduleOp = annotationOp->getParentOfType<mlir::ModuleOp>();
     StringRef funcName = annotationOp.getFuncName();
@@ -236,7 +236,7 @@ struct EmitErrorKnobs
 
     // Create a new decision tree operation at the beginning of the function
     rewriter.setInsertionPointToStart(&funcOp.getBody().front());
-    rewriter.create<approxMLIR::decideOp>(
+    rewriter.create<approx::decideOp>(
       funcOp.getLoc(), std::nullopt, state,
       annotationOp.getNumThresholds(), annotationOp.getThresholdsUppers(),
       annotationOp.getThresholdsLowers(), annotationOp.getDecisionValues(),
@@ -269,7 +269,7 @@ struct EmitErrorKnobs
     }
     
     // Create the KnobOp with the function's return types
-    auto knobOp = rewriter.create<approxMLIR::KnobOp>(
+    auto knobOp = rewriter.create<approx::knobOp>(
       funcOp.getLoc(), 
       funcOp.getFunctionType().getResults(),
       newFuncBlock->getArguments().back(),    // state from NEW block
@@ -297,7 +297,7 @@ struct EmitErrorKnobs
       for (auto &op : llvm::make_early_inc_range(knobBlock)) {
         if (auto returnOp = dyn_cast<func::ReturnOp>(op)) {
           rewriter.setInsertionPoint(&op);
-          rewriter.create<approxMLIR::yieldOp>(
+          rewriter.create<approx::yieldOp>(
               returnOp.getLoc(), returnOp.getOperands());
           rewriter.eraseOp(returnOp);
         }
@@ -338,7 +338,7 @@ struct EmitApproxPass : public impl::EmitApproxPassBase<EmitApproxPass> {
   void runOnOperation() override {
     ConversionTarget target(getContext());
 
-    target.addIllegalOp<approxMLIR::utilAnnotationDecisionTreeOp>();
+    target.addIllegalOp<approx::utilAnnotationDecisionTreeOp>();
 
     target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
 
@@ -354,12 +354,12 @@ struct EmitApproxPass : public impl::EmitApproxPassBase<EmitApproxPass> {
 
 
 namespace mlir{
-        namespace approxMLIR {
+        namespace approx {
             std::unique_ptr<Pass> createEmitApproxPass() {
                 return std::make_unique<EmitApproxPass>();
             }
 //         void registerEmitApproxPass() {
 //             PassRegistration<EmitApproxPass>();
 //         }
-    } // namespace approxMLIR
+    } // namespace approx
 } // namespace mlir

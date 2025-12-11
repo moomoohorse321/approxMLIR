@@ -7,12 +7,12 @@
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "approxMLIR/Dialect.h"
+#include "approx/Dialect.h"
 
 #include <memory>
 
 /**
- * Pass.td defines Ops required for approxMLIR dialect
+ * Pass.td defines Ops required for approx dialect
  * 
  * Passes achieve 2 goals:
  * 1. Codegen from exact Ops [Represent approximate transformation]
@@ -23,14 +23,14 @@ namespace mlir {
     class PatternRewriter;
     class RewritePatternSet;
     class DominanceInfo;
-    namespace approxMLIR {
+    namespace approx {
         std::unique_ptr<Pass> createEmitApproxPass();
         std::unique_ptr<Pass> createConfigApproxPass();
         std::unique_ptr<Pass> createPreEmitTransformationPass();
         std::unique_ptr<Pass> createTransformApproxPass();
         // void registerEmitApproxPass();
         // void registerConfigApproxPass();
-   } // namespace approxMLIR
+   } // namespace approx
 } // namespace mlir
 
 void fully2ComposeAffineMapAndOperands(
@@ -81,7 +81,7 @@ namespace mlir {
 
     #define GEN_PASS_DECL
     #define GEN_PASS_REGISTRATION
-    #include "approxMLIR/Passes/Passes.h.inc"
+    #include "approx/Passes/Passes.h.inc"
 } // end namespace mlir
 
-#endif // APPROXMLIR_DIALECT_APPROXMLIR_PASSES_H
+#endif // APPROX_DIALECT_APPROX_PASSES_H

@@ -263,7 +263,7 @@ def init_mlir_files():
     
     replace_exec_path = "../../external-tools/approx/replace"
     merge_exec_path = "../../external-tools/approx/merge"
-    opt_exec_path = "../../build/bin/approxMLIR-opt"
+    opt_exec_path = "../../build/bin/approx-opt"
     mlir_path1 = "./approx.mlir"
     mlir_path2 = "./exact.mlir"
     output_path = "./merged.mlir"

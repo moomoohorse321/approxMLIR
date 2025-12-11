@@ -1,4 +1,4 @@
-//===- approxMLIROps.h - approxMLIR dialect ops -----------------*- C++ -*-===//
+//===- approxOps.h - approx dialect ops -----------------*- C++ -*-===//
 //
 // This file is licensed under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef APPROXMLIR_APPROXMLIROPS_H
-#define APPROXMLIR_APPROXMLIROPS_H
+#ifndef APPROX_APPROXOPS_H
+#define APPROX_APPROXOPS_H
 
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/Bytecode/BytecodeOpInterface.h"
@@ -18,6 +18,6 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 
 #define GET_OP_CLASSES
-#include "approxMLIR/approxMLIROps.h.inc"
+#include "approx/approxOps.h.inc"
 
-#endif // APPROXMLIR_APPROXMLIROPS_H
+#endif // APPROX_APPROXOPS_H

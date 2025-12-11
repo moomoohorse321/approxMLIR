@@ -21,7 +21,7 @@ This setup assumes that you have built LLVM and MLIR in `$BUILD_DIR` and install
 ```sh
 mkdir build && cd build
 cmake -G Ninja .. -DMLIR_DIR=$PWD/../llvm-project/build/lib/cmake/mlir -DLLVM_EXTERNAL_LIT=$PWD/../llvm-project/build/bin/llvm-lit
-cmake --build . --target check-approxMLIR-opt
+cmake --build . --target check-approx-opt
 ```
 To build the documentation from the TableGen description of the dialect
 operations, run

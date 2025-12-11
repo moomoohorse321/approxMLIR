@@ -1,4 +1,4 @@
-//===- approxMLIROps.cpp - approxMLIR dialect ops ---------------*- C++ -*-===//
+//===- approxDialect.h - approx dialect -----------------*- C++ -*-===//
 //
 // This file is licensed under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,9 +6,11 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "approxMLIR/Ops.h"
-#include "approxMLIR/Dialect.h"
-#include "mlir/IR/OpImplementation.h"
+#ifndef APPROX_APPROXDIALECT_H
+#define APPROX_APPROXDIALECT_H
 
-#define GET_OP_CLASSES
-#include "approxMLIR/approxMLIROps.cpp.inc"
+#include "mlir/IR/Dialect.h"
+
+#include "approx/approxOpsDialect.h.inc"
+
+#endif // APPROX_APPROXDIALECT_H

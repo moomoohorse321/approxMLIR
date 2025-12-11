@@ -1,4 +1,4 @@
-//===- approxMLIROps.td - approxMLIR dialect ops -----------*- tablegen -*-===//
+//===- approxOps.td - approx dialect ops -----------*- tablegen -*-===//
 //
 // This file is licensed under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef APPROXMLIR_OPS
-#define APPROXMLIR_OPS
+#ifndef APPROX_OPS
+#define APPROX_OPS
 
 include "Dialect.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
@@ -18,64 +18,79 @@ include "mlir/Interfaces/LoopLikeInterface.td"
 include "mlir/IR/RegionKindInterface.td"
 include "mlir/IR/SymbolInterfaces.td"
 
-def fooOp : approxMLIR_Op<"foo", [Pure,
-                                             SameOperandsAndResultType]> {
-    let summary = "A template for defining all ApproxMLIR Ops.";
-    let description = [{
-        The `approxMLIR.foo` operation illustrates how to define a new
-        operation in a dialect. It uses an operation trait to declare that it
-        has no side effects.
+// ============================================================================
+// TryOp - Simplified Try-Check-Recover (Aloe paper semantics)
+// ============================================================================
+//
+// This op is placed immediately before approx.yield in a KnobOp.
+// The yield's operands are implicitly the "candidates" to validate.
+//
+// Lowering (done in emit-safety pass):
+//   1. Inline check region before yield
+//   2. Create scf.if based on checker validity
+//   3. "then": yield original values
+//   4. "else": call recovery function
+//   5. Update yield to use if result
+//
+// Example:
+//   approx.knob(...) {
+//     %v = arith.addf %a, %b : f32
+//     approx.try(%a, %b) recover("@r") check {
+//       ^bb0(%x: f32, %y: f32):
+//         %ok = func.call @checker(%v, %x, %y) -> i1
+//         approx.yield %ok : i1
+//     }
+//     approx.yield %v : f32  // <-- candidates
+//   }
+// ============================================================================
 
-        This operation takes an integer argument and returns an integer.
-
-        Example:
-
-        ```mlir
-        %0 = arith.constant 2 : i32
-        // Apply the foo operation to %0
-        %1 = APPROXMLIR.foo %0 : i32
-        ```
-    }];
-
-    let arguments = (ins I32:$input);
-    let results = (outs I32:$res);
-
-    let assemblyFormat = [{
-        $input attr-dict `:` type($input)
-    }];
-}
-
-
-def checkerOp: approxMLIR_Op<"checker", [Pure]> {
-    let summary = "A Checker Op to mark the safety checker of the Op.";
-    let description = [{
-        The `approxMLIR.checker` operation illustrates how to define an
-        operation that marks the safety checker of the Op. It uses an
-        operation trait to declare that it has no side effects.
-
-        This operation takes an integer argument and returns an integer.
-
-        Example:
-
-        ```mlir
-        %0 = arith.constant 2 : i32
-        // Apply the checker operation to %0
-        %1 = APPROXMLIR.checker %0 : i32
-        ```
-    }];
-
-    let arguments = (ins AnyType: $state); // state
+def TryOp : approx_Op<"try"> {
     
-    let regions = (region AnyRegion:$body); 
+    let summary = "Try-Check-Recover safety contract (before yield in KnobOp)";
+    let description = [{
+        Safety contract operation for error detection and recovery.
+        Must be placed immediately before `approx.yield` in a `KnobOp`.
+        
+        **Operands (`recovery_args`):**
+        Context values passed to:
+        - Check region as block arguments
+        - Recovery function on check failure
+        
+        **Check Region:**
+        - Receives `recovery_args` as block arguments
+        - Must yield exactly one `i1` (validity boolean)
+        - Can access values defined earlier in the KnobOp
+        
+        **Recover Attribute:**
+        Name of recovery function: `(recovery_args...) -> (yield_types...)`
+        
+        **Lowering to scf.if:**
+        ```
+        %ok = <inline check region>
+        %result = scf.if %ok -> (T) {
+          scf.yield %original_yield_values
+        } else {
+          %rec = func.call @recover(%recovery_args) -> T
+          scf.yield %rec
+        }
+        // Original yield updated to: approx.yield %result
+        ```
+    }];
 
-    let assemblyFormat = "$state attr-dict `:` type($state) $body";
+    let arguments = (ins 
+        Variadic<AnyType>:$recovery_args,
+        StrAttr:$recover
+    );
+
+    let regions = (region SizedRegion<1>:$checkRegion);
+    
+    let results = (outs);  // No results - modifies following yield
 }
 
-
-def decideOp : approxMLIR_Op<"decide"> {
+def decideOp : approx_Op<"decide"> {
     let summary = "A Decide Op to mark the decision tree of the Op.";
     let description = [{
-        The `approxMLIR.decide` operation illustrates how to define an
+        The `approx.decide` operation illustrates how to define an
         operation that marks the decision tree of the Op. It uses an
         operation trait to declare that it has no side effects.
 
@@ -85,7 +100,7 @@ def decideOp : approxMLIR_Op<"decide"> {
 
         ```mlir
         // %state has type f32
-        approxMLIR.decide (%state) {
+        approx.decide (%state) {
             decision_values = array<i32: 0, 1>,
             decisions = array<i32: 0, 1>,
             num_thresholds = 1,
@@ -97,7 +112,7 @@ def decideOp : approxMLIR_Op<"decide"> {
         Example (generic form, without pretty print):
 
         ```mlir
-         "approxMLIR.decide"(%state) <{
+         "approx.decide"(%state) <{
               decision_values = array<i32: 0, 1>,
               decisions = array<i32: 0, 1>,
               num_thresholds = 1 : i32,
@@ -123,7 +138,7 @@ def decideOp : approxMLIR_Op<"decide"> {
     let assemblyFormat = "`(` $state `)` attr-dict `:` type($state)";
 }
 
-def transformOp : approxMLIR_Op<"transform"> {
+def transformOp : approx_Op<"transform"> {
     let summary = "The markup Op that holds the type of transformation as an int.";
     let description = [{
         Currently there are 3 transformations:
@@ -147,7 +162,7 @@ def transformOp : approxMLIR_Op<"transform"> {
         2. loop_perforate:
             * loop perforate operates on scf.for loops. 
             Example workload:
-            "approxMLIR.util.annotation.decision_tree"() <{decision_values = array<i32: 0, 1>, decisions = array<i32: 1, 2>, func_name = "base", num_thresholds = 1 : i32, thresholds = array<i32: 2>, thresholds_lowers = array<i32: 0>, thresholds_uppers = array<i32: 4>, transform_type = "loop_perforate"}> : () -> ()
+            "approx.util.annotation.decision_tree"() <{decision_values = array<i32: 0, 1>, decisions = array<i32: 1, 2>, func_name = "base", num_thresholds = 1 : i32, thresholds = array<i32: 2>, thresholds_lowers = array<i32: 0>, thresholds_uppers = array<i32: 4>, transform_type = "loop_perforate"}> : () -> ()
             llvm.mlir.global internal constant @str0("Base function result: %d\0A\00") {addr_space = 0 : i32}
             llvm.func @printf(!llvm.ptr, ...) -> i32
             func.func @base(%arg0: i32, %arg1: i32) -> i32 attributes {llvm.linkage = #llvm.linkage<external>} {
@@ -163,12 +178,12 @@ def transformOp : approxMLIR_Op<"transform"> {
                 return %1 : i32
             }
         3. func_substitute:
-            * func substitute operates on functions who are annotated with "approxMLIR.util.annotation.convert_to_call"() <{func_name = "base"}> : () -> ()
+            * func substitute operates on functions who are annotated with "approx.util.annotation.convert_to_call"() <{func_name = "base"}> : () -> ()
             * For each substution, the user must provide a approximate version of the function. 
             Example workload:
-            "approxMLIR.util.annotation.decision_tree"() <{decision_values = array<i32: 0, 1>, decisions = array<i32: 0, 1>, func_name = "base", num_thresholds = 1 : i32, thresholds = array<i32: 2>, thresholds_lowers = array<i32: 0>, thresholds_uppers = array<i32: 4>, transform_type = "func_substitute"}> : () -> ()
+            "approx.util.annotation.decision_tree"() <{decision_values = array<i32: 0, 1>, decisions = array<i32: 0, 1>, func_name = "base", num_thresholds = 1 : i32, thresholds = array<i32: 2>, thresholds_lowers = array<i32: 0>, thresholds_uppers = array<i32: 4>, transform_type = "func_substitute"}> : () -> ()
 
-            "approxMLIR.util.annoatation.convert_to_call"() <{func_name = "base"}> : () -> ()
+            "approx.util.annoatation.convert_to_call"() <{func_name = "base"}> : () -> ()
 
             llvm.mlir.global internal constant @str0("Base function result: %d\0A\00") {addr_space = 0 : i32}
             llvm.func @printf(!llvm.ptr, ...) -> i32
@@ -199,7 +214,7 @@ def transformOp : approxMLIR_Op<"transform"> {
             }
         Example:
         ```mlir
-             "approxMLIR.transform"() <{knob_val = 1 : i32, transform_type = "task_skipping"}> : () -> ()
+             "approx.transform"() <{knob_val = 1 : i32, transform_type = "task_skipping"}> : () -> ()
         ```
     }];
     let arguments = (ins SymbolNameAttr: $transform_type, I32Attr:$knob_val);
@@ -207,10 +222,10 @@ def transformOp : approxMLIR_Op<"transform"> {
 
 
 
-def yieldOp : approxMLIR_Op<"yield", [Pure, Terminator]> {
+def yieldOp : approx_Op<"yield", [Pure, Terminator]> {
     let summary = "A Yield Op to mark the end of the Op.";
     let description = [{
-        The `approxMLIR.yield` operation illustrates how to define an
+        The `approx.yield` operation illustrates how to define an
         operation that marks the end of the Op. It uses an
         operation trait to declare that it has no side effects.
 
@@ -221,7 +236,7 @@ def yieldOp : approxMLIR_Op<"yield", [Pure, Terminator]> {
         ```mlir
         %0 = arith.constant 2 : i32
         // Apply the yield operation to %0
-        %1 = approxMLIR.yield %0 : i32
+        approx.yield %0 : i32
         ```
     }];
     let arguments = (ins Variadic<AnyType>:$results); // Use $inputs as per your naming
@@ -230,10 +245,10 @@ def yieldOp : approxMLIR_Op<"yield", [Pure, Terminator]> {
 }
 
 
-def approxMLIR_KnobOp : approxMLIR_Op<"knob">  {
+def knobOp : approx_Op<"knob">  {
     let summary = "An error knob Op acting as a wrapper to the transformed Op / Graph.";
     let description = [{
-        The `approxMLIR.knob` operation illustrates how to define an error knob that characterizes the transformation of the internal Op / Graph. Error knob unqiuely determines how the internal Op will be lowered.
+        The `approx.knob` operation illustrates how to define an error knob that characterizes the transformation of the internal Op / Graph. Error knob unqiuely determines how the internal Op will be lowered.
 
         Goal: 
             * Define a decision tree and a (state -> decision) for transformation of the exact Op (i.e. the Op that will be lowered to approximate form).
@@ -267,19 +282,19 @@ def approxMLIR_KnobOp : approxMLIR_Op<"knob">  {
 
 // ------------------- Utility Ops ------------------- //
 
-def utilAnnotationConvertToCallOp : approxMLIR_Op<"util.annotation.convert_to_call"> {
+def utilAnnotationConvertToCallOp : approx_Op<"util.annotation.convert_to_call"> {
     let summary = "A utility Op to convert a function to a call to its body.";
     let description = [{
         Example:
         ```mlir
-            "approxMLIR.util.annotation.convert_to_call"() <{func_name = "main"}> : () -> ()
+            "approx.util.annotation.convert_to_call"() <{func_name = "main"}> : () -> ()
         ```
     }];
 
     let arguments = (ins SymbolNameAttr: $func_name);
 }
 
-def utilAnnotationDecisionTreeOp : approxMLIR_Op<"util.annotation.decision_tree"> {
+def utilAnnotationDecisionTreeOp : approx_Op<"util.annotation.decision_tree"> {
     let summary = "A utility Op to support identifying the scope and the attribtues of the decision tree.";
     let description = [{
         This op annotates the modules to identify:
@@ -290,7 +305,7 @@ def utilAnnotationDecisionTreeOp : approxMLIR_Op<"util.annotation.decision_tree"
 
         Example:
         ```mlir
-        "approxMLIR.util.annotation.decision_tree"() <{
+        "approx.util.annotation.decision_tree"() <{
             decision_tree = "main",
             transform_type = "loop_perforate",
             num_thresholds = 1 : i32,
@@ -313,5 +328,39 @@ def utilAnnotationDecisionTreeOp : approxMLIR_Op<"util.annotation.decision_tree"
                          DenseI32ArrayAttr: $decisions);
 }
 
+def utilAnnotationTryOp : approx_Op<"util.annotation.try"> {
+    let summary = "Annotation to inject try-check-recover into a function's knob";
+    let description = [{
+        Marks a function for safety contract injection. The `emit-safety` pass
+        processes this to inject a TryOp into the first KnobOp.
+        
+        **Attributes:**
+        - `func_name`: Function containing the KnobOp
+        - `recover`: Recovery function name
+        - `checker`: Checker function name
+        
+        **Pass Behavior (`emit-safety`):**
+        1. Find function by `func_name`
+        2. Find first KnobOp in function
+        3. Create TryOp before yield with check region calling `checker`
+        4. Erase this annotation
+        
+        Example:
+        ```mlir
+        "approx.util.annotation.try"() <{
+          func_name = "my_func",
+          recover = "@recover_impl",
+          checker = "@checker_impl"
+        }> : () -> ()
+        ```
+    }];
 
-#endif // APPROXMLIR_OPS
+    let arguments = (ins 
+        SymbolNameAttr:$func_name,
+        StrAttr:$recover,
+        StrAttr:$checker
+    );
+}
+
+
+#endif // APPROX_OPS
