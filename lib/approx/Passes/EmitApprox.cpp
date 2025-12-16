@@ -228,7 +228,7 @@ struct EmitErrorKnobs
              << funcName << "' not found.";
     }
     
-    // Get the state argument
+    // Get the state argument: current implementation assumes it's the last argument. - Hao
     BlockArgument state = getState(funcOp);
     if (!state) {
       return failure();

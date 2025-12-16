@@ -28,6 +28,7 @@ namespace mlir {
         std::unique_ptr<Pass> createConfigApproxPass();
         std::unique_ptr<Pass> createPreEmitTransformationPass();
         std::unique_ptr<Pass> createTransformApproxPass();
+        std::unique_ptr<Pass> createEmitSafetyPass();
         // void registerEmitApproxPass();
         // void registerConfigApproxPass();
    } // namespace approx

@@ -44,11 +44,25 @@ struct FinalizeDecisionTree : public OpRewritePattern<approx::yieldOp> {
 
   LogicalResult matchAndRewrite(approx::yieldOp yieldOp,
                                 PatternRewriter &rewriter) const final {
-    rewriter.setInsertionPoint(yieldOp);
-    rewriter.replaceOpWithNewOp<scf::YieldOp>(yieldOp, yieldOp.getOperands());
+    Operation *parentOp = yieldOp->getParentOp();
+    if (parentOp && parentOp->getDialect() &&
+      parentOp->getDialect()->getNamespace() == "scf") {
+      rewriter.setInsertionPoint(yieldOp);
+      rewriter.replaceOpWithNewOp<scf::YieldOp>(yieldOp, yieldOp.getOperands());
+      return success();
+    }
+    // rewriter.setInsertionPoint(yieldOp);
+    // rewriter.replaceOpWithNewOp<scf::YieldOp>(yieldOp, yieldOp.getOperands());
     return success();
   }
 };
+/**
+ * todo: we should decouple the lowering of knob and lowering of decision tree. 
+ * we need to account for multiple possible approx ops in the knob body. The approx ops shouldn't be hoisted to each case block.
+ * After emitting the checking and branches, we must not further remove the knob op. 
+ * The knob body, after ConfigureDecisionTree, will contains the checking logic, branches, and approx ops. 
+ * For now, we assume there is only one approx op in the knob body.
+ */
 struct ConfigureDecisionTree : public OpRewritePattern<approx::decideOp> {
   using OpRewritePattern<approx::decideOp>::OpRewritePattern;
 
@@ -173,6 +187,106 @@ struct ConfigureDecisionTree : public OpRewritePattern<approx::decideOp> {
     return success();
   }
 };
+
+/**
+ * Side-effect: 
+ *   - Require a parent knobOp
+ */
+struct ConfigureTry : public OpRewritePattern<approx::TryOp> {
+  using OpRewritePattern<approx::TryOp>::OpRewritePattern;
+
+  LogicalResult
+  matchAndRewrite(approx::TryOp tryOp,
+                  PatternRewriter &rewriter) const final {
+    
+    Location loc = tryOp.getLoc();
+    
+    // 1. Find the yield that follows this TryOp
+    // todo: instead of finding the next op, we should find the approx.yield in the parent op region.
+    Operation *nextOp = tryOp->getNextNode();
+    auto yieldOp = dyn_cast_or_null<approx::yieldOp>(nextOp);
+    
+    if (!yieldOp) { // todo: drop this assumption
+      return tryOp.emitOpError("TryOp must be immediately followed by approx.yield");
+    }
+    
+    // 2. Get the recovery args and recover function name
+    ValueRange recoveryArgs = tryOp.getRecoveryArgs();
+    StringRef recoverFuncName = tryOp.getRecover();
+    
+    // 3. Get the yield operands (these are the "candidates" / success values)
+    SmallVector<Value> yieldOperands(yieldOp.getResults().begin(), 
+                                      yieldOp.getResults().end());
+    SmallVector<Type> resultTypes;
+    for (Value v : yieldOperands) {
+      resultTypes.push_back(v.getType());
+    }
+    
+    // 4. Inline the check region to get the validity boolean
+    Region &checkRegion = tryOp.getCheckRegion();
+    Block &checkBlock = checkRegion.front();
+    
+    // Map block arguments to recovery args
+    IRMapping mapping;
+    for (auto [blockArg, recoveryArg] : llvm::zip(checkBlock.getArguments(),
+                                                   recoveryArgs)) {
+      mapping.map(blockArg, recoveryArg);
+    }
+    
+    // Clone operations from check region (except terminator)
+    rewriter.setInsertionPoint(tryOp);
+    for (Operation &op : checkBlock.without_terminator()) {
+      Operation *clonedOp = rewriter.clone(op, mapping);
+      for (auto [oldResult, newResult] : llvm::zip(op.getResults(),
+                                                    clonedOp->getResults())) {
+        mapping.map(oldResult, newResult);
+      }
+    }
+    
+    // Get the validity result from the terminator
+    auto checkYield = cast<approx::yieldOp>(checkBlock.getTerminator());
+    Value validityResult = mapping.lookupOrDefault(checkYield.getResults()[0]);
+    
+    // 5. Create the scf.if operation
+    auto ifOp = rewriter.create<scf::IfOp>(
+        loc,
+        resultTypes,
+        validityResult,
+        /*withElseRegion=*/true
+    );
+    
+    // 6. Build the "then" branch (check passed - use original yield values)
+    {
+      rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+      rewriter.create<scf::YieldOp>(loc, yieldOperands);
+    }
+    
+    // 7. Build the "else" branch (check failed - call recovery)
+    {
+      rewriter.setInsertionPointToStart(&ifOp.getElseRegion().front());
+      
+      // Call the recovery function
+      auto recoverCall = rewriter.create<func::CallOp>(
+          loc,
+          resultTypes,
+          SymbolRefAttr::get(rewriter.getContext(), recoverFuncName),
+          recoveryArgs
+      );
+      
+      rewriter.create<scf::YieldOp>(loc, recoverCall.getResults());
+    }
+    
+    // 8. Update the original yield to use the if results
+    rewriter.setInsertionPoint(yieldOp);
+    rewriter.replaceOpWithNewOp<approx::yieldOp>(yieldOp, ifOp.getResults());
+    
+    // 9. Erase the TryOp
+    rewriter.eraseOp(tryOp);
+    
+    return success();
+  }
+};
+
 struct ConfigApproxPass : public impl::ConfigApproxPassBase<ConfigApproxPass> {
   using ConfigApproxPassBase::ConfigApproxPassBase;
 
@@ -180,6 +294,7 @@ struct ConfigApproxPass : public impl::ConfigApproxPassBase<ConfigApproxPass> {
     RewritePatternSet patterns(&getContext());
     patterns.add<ConfigureDecisionTree>(&getContext());
     patterns.add<FinalizeDecisionTree>(&getContext());
+    patterns.add<ConfigureTry>(&getContext());
     GreedyRewriteConfig config;
     config.setMaxIterations(1);
     (void)(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns), config)); // apply the patterns to the operation

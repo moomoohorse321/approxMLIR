@@ -44,6 +44,7 @@ int main(int argc, char **argv) {
   mlir::registerConfigApproxPass();
   mlir::registerTransformApproxPass();
   mlir::registerPreEmitTransformationPass();
+  mlir::registerEmitSafetyPass();
 
   mlir::DialectRegistry registry;
   mlir::registerAllExtensions(registry);

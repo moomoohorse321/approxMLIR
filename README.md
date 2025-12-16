@@ -20,7 +20,7 @@ ninja check-mlir
 This setup assumes that you have built LLVM and MLIR in `$BUILD_DIR` and installed them to `$PREFIX`. To build and launch the tests, run
 ```sh
 mkdir build && cd build
-cmake -G Ninja .. -DMLIR_DIR=$PWD/../llvm-project/build/lib/cmake/mlir -DLLVM_EXTERNAL_LIT=$PWD/../llvm-project/build/bin/llvm-lit
+cmake -G Ninja .. -DMLIR_DIR=$PWD/../llvm-project/build/lib/cmake/mlir -DLLVM_EXTERNAL_LIT=$PWD/../llvm-project/build/bin/llvm-lit -DCMAKE_BUILD_TYPE=RelWithDebInfo 
 cmake --build . --target check-approx-opt
 ```
 To build the documentation from the TableGen description of the dialect
