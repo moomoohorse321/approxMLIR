@@ -2,9 +2,10 @@
 add_mlir_dialect_library(MLIRApproxTransforms
   PreEmitTransformations.cpp
   EmitApprox.cpp
+  EmitManagement.cpp
   ConfigApprox.cpp
   TransformApprox.cpp
-  EmitSafety.cpp
+  FinalizeApprox.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Dialect/Affine

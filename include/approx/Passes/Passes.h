@@ -17,6 +17,10 @@
  * Passes achieve 2 goals:
  * 1. Codegen from exact Ops [Represent approximate transformation]
  * 2. Lower approxOps to Exact Ops [perform approximate transformation]
+ * 
+ * Pass ordering:
+ *   pre-emit-transform -> emit-approx -> emit-management -> config-approx 
+ *   -> transform-approx -> finalize-approx
  */
 
 namespace mlir {
@@ -25,12 +29,11 @@ namespace mlir {
     class DominanceInfo;
     namespace approx {
         std::unique_ptr<Pass> createEmitApproxPass();
+        std::unique_ptr<Pass> createEmitManagementPass();
         std::unique_ptr<Pass> createConfigApproxPass();
         std::unique_ptr<Pass> createPreEmitTransformationPass();
         std::unique_ptr<Pass> createTransformApproxPass();
-        std::unique_ptr<Pass> createEmitSafetyPass();
-        // void registerEmitApproxPass();
-        // void registerConfigApproxPass();
+        std::unique_ptr<Pass> createFinalizeApproxPass();
    } // namespace approx
 } // namespace mlir
 

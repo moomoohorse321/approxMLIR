@@ -40,11 +40,13 @@ int main(int argc, char **argv) {
   mlir::tosa::registerStablehloLegalizeToTosaPassPass();
   mlir::tosa::registerStablehloPrepareForTosaPassPass();
   
+  // Register approx passes
   mlir::registerEmitApproxPass();
+  mlir::registerEmitManagementPass();
   mlir::registerConfigApproxPass();
   mlir::registerTransformApproxPass();
   mlir::registerPreEmitTransformationPass();
-  mlir::registerEmitSafetyPass();
+  mlir::registerFinalizeApproxPass();
 
   mlir::DialectRegistry registry;
   mlir::registerAllExtensions(registry);

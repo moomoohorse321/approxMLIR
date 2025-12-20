@@ -11,79 +11,71 @@ def PreEmitTransformationPass : Pass<"pre-emit-transform"> {
 }
 
 def EmitApproxPass : Pass<"emit-approx"> {
-  let summary = "Emit Aproxmiate For Op Pass (Annotation is implemented by Func Dialect's Ops)";
+  let summary = "Emit knobOp wrapping function bodies (from annotations)";
+  let description = [{
+    This pass processes knob-related annotations to wrap function bodies
+    in knobOp operations. It only emits knobOp - management ops (decideOp,
+    TryOp, transformOp) are emitted by the emit-management pass.
+    
+    Handles:
+    - `approx.util.annotation.decision_tree` -> emits knobOp (decideOp emitted later)
+    - `approx.util.annotation.knob` -> emits knobOp only
+  }];
   let constructor = "mlir::approx::createEmitApproxPass()";
   let dependentDialects = [
    "mlir::func::FuncDialect",  "scf::SCFDialect",
    "mlir::approx::approxDialect"];
 }
 
-def ConfigApproxPass : Pass<"config-approx"> {
-  let summary = "Lower the configured MLIR";
-  let constructor = "mlir::approx::createConfigApproxPass()";
-  let dependentDialects = [
-   "mlir::func::FuncDialect", 
-   "mlir::approx::approxDialect"];
-}
-
-def TransformApproxPass : Pass<"transform-approx"> {
-  let summary = "Lower the configured MLIR";
-  let constructor = "mlir::approx::createTransformApproxPass()";
-  let dependentDialects = ["func::FuncDialect", "scf::SCFDialect",
-    "approx::approxDialect"];
-}
-
-
-def EmitSafetyPass : Pass<"emit-safety"> {
-  let summary = "Emit and lower safety contracts (try-check-recover)";
+def EmitManagementPass : Pass<"emit-management"> {
+  let summary = "Emit management ops (decideOp, TryOp, transformOp) into knobOp bodies";
   let description = [{
-    This pass handles safety contract transformations in two stages:
+    This pass processes management annotations and injects the corresponding
+    operations into existing knobOp bodies:
     
-    1. **Emit TryOp from Annotations**: 
-       Processes `approx.util.annotation.try` operations to inject 
-       `approx.try` operations into the first KnobOp in the specified function.
+    1. **Emit DecideOp from Annotations**: 
+       Processes `approx.util.annotation.decision_tree` to inject `approx.decide`
+       with stateRegion into the first KnobOp in the specified function.
     
-    2. **Lower TryOp**: 
-       Lowers `approx.try` operations to `scf.if` control flow by:
-       - Inlining the check region
-       - Creating an if-else based on checker validity
-       - "then" branch uses original yield values
-       - "else" branch calls recovery function
-       - Updating the yield to use if results
+    2. **Emit TryOp from Annotations**: 
+       Processes `approx.util.annotation.try` to inject `approx.try`
+       operations into the first KnobOp in the specified function.
     
-    Example transformation:
+    3. **Emit TransformOp from Annotations**:
+       Processes `approx.util.annotation.transform` to inject static
+       `approx.transform` operations into the first KnobOp.
+    
+    Example transformation for decision tree:
     ```mlir
-    // Input: Annotation + KnobOp with yield
-    "approx.util.annotation.try"() <{
-      func_name = "f", recover = "@r", checker = "@c"
+    // Input: knobOp (from emit-approx) + annotation
+    "approx.util.annotation.decision_tree"() <{
+      func_name = "f", state_indices = [2], state_function = "getState", ...
     }> : () -> ()
     
-    func @f(%arg0: f32) -> f32 {
-      %x = approx.knob(%arg0) ... {
-        %v = arith.addf %arg0, %arg0 : f32
+    func @f(%arg0: f32, %arg1: f32, %arg2: i32) -> f32 {
+      %x = approx.knob(%arg0, %arg1, %arg2) ... {
+        %v = arith.addf %arg0, %arg1 : f32
         approx.yield %v : f32
       }
       return %x : f32
     }
     
-    // Output: scf.if control flow
-    func @f(%arg0: f32) -> f32 {
-      %x = approx.knob(%arg0) ... {
-        %v = arith.addf %arg0, %arg0 : f32
-        %ok = func.call @c(%v, %arg0) : (f32, f32) -> i1
-        %result = scf.if %ok -> (f32) {
-          scf.yield %v : f32
-        } else {
-          %rec = func.call @r(%arg0) : (f32) -> f32
-          scf.yield %rec : f32
+    // Output: decideOp with stateRegion inside knobOp
+    func @f(%arg0: f32, %arg1: f32, %arg2: i32) -> f32 {
+      %x = approx.knob(%arg0, %arg1, %arg2) ... {
+        approx.decide(%arg2) <{thresholds = [...], ...}> state {
+          ^bb0(%s: i32):
+            %state = func.call @getState(%s) : (i32) -> i32
+            approx.yield %state : i32
         }
-        approx.yield %result : f32
+        %v = arith.addf %arg0, %arg1 : f32
+        approx.yield %v : f32
       }
       return %x : f32
     }
     ```
   }];
-  let constructor = "mlir::approx::createEmitSafetyPass()";
+  let constructor = "mlir::approx::createEmitManagementPass()";
   let dependentDialects = [
     "mlir::func::FuncDialect",
     "mlir::scf::SCFDialect", 
@@ -91,5 +83,53 @@ def EmitSafetyPass : Pass<"emit-safety"> {
   ];
 }
 
+def ConfigApproxPass : Pass<"config-approx"> {
+  let summary = "Lower management ops (decideOp, TryOp) inside knobOp";
+  let description = [{
+    This pass lowers management operations to standard MLIR control flow
+    while keeping the knobOp intact.
+    
+    1. **ConfigureDecisionTree**: Lowers `approx.decide` to `scf.index_switch`
+       - Inlines stateRegion to get state value
+       - Computes branch index from thresholds
+       - Creates switch with transformOp in each case
+       - Does NOT replace knobOp
+    
+    2. **ConfigureTry**: Lowers `approx.try` to `scf.if`
+       - Inlines check region
+       - Creates if-else for success/recovery paths
+    
+    3. **FinalizeDecisionTree**: Converts approx.yield inside scf ops to scf.yield
+  }];
+  let constructor = "mlir::approx::createConfigApproxPass()";
+  let dependentDialects = [
+   "mlir::func::FuncDialect", 
+   "mlir::scf::SCFDialect",
+   "mlir::approx::approxDialect"];
+}
+
+def TransformApproxPass : Pass<"transform-approx"> {
+  let summary = "Apply transformOp approximations (loop perforation, etc.)";
+  let constructor = "mlir::approx::createTransformApproxPass()";
+  let dependentDialects = ["func::FuncDialect", "scf::SCFDialect",
+    "approx::approxDialect"];
+}
+
+def FinalizeApproxPass : Pass<"finalize-approx"> {
+  let summary = "Inline knobOp bodies and remove knob wrappers";
+  let description = [{
+    This pass inlines the body of each knobOp to its parent region and
+    removes the knobOp wrapper. This is the final step after all
+    management ops have been lowered and transformations applied.
+    
+    The pass:
+    1. Finds the yield terminator in knobOp body
+    2. Clones all operations (except yield) before the knobOp
+    3. Replaces knobOp results with yield operands
+    4. Erases the knobOp
+  }];
+  let constructor = "mlir::approx::createFinalizeApproxPass()";
+  let dependentDialects = ["mlir::approx::approxDialect"];
+}
 
 #endif // APPROX_PASSES

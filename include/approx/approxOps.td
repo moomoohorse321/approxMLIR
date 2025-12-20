@@ -25,7 +25,7 @@ include "mlir/IR/SymbolInterfaces.td"
 // This op is placed immediately before approx.yield in a KnobOp.
 // The yield's operands are implicitly the "candidates" to validate.
 //
-// Lowering (done in emit-safety pass):
+// Lowering (done in config-approx pass):
 //   1. Inline check region before yield
 //   2. Create scf.if based on checker validity
 //   3. "then": yield original values
@@ -87,55 +87,74 @@ def TryOp : approx_Op<"try"> {
     let results = (outs);  // No results - modifies following yield
 }
 
-def decideOp : approx_Op<"decide"> {
-    let summary = "A Decide Op to mark the decision tree of the Op.";
-    let description = [{
-        The `approx.decide` operation illustrates how to define an
-        operation that marks the decision tree of the Op. It uses an
-        operation trait to declare that it has no side effects.
+// ============================================================================
+// decideOp - Dynamic Decision Tree (with stateRegion for runtime binding)
+// ============================================================================
+//
+// This op is placed inside a KnobOp to enable dynamic approximation.
+// The stateRegion computes the runtime state and yields an i32.
+// During lowering, this i32 is compared against thresholds to select a branch.
+//
+// Example after emit-management:
+//   approx.knob(%arg0, %arg1, %arg2) <{id = 0, ...}> ({
+//     approx.decide(%arg2) <{
+//       thresholds = [5, 10],
+//       decisions = [0, 1, 2],
+//       transform_type = "loop_perforate"
+//     }> state {
+//       ^bb0(%s: i32):
+//         %state_val = func.call @getState(%s) : (i32) -> i32
+//         approx.yield %state_val : i32
+//     }
+//     // ... rest of knob body
+//     approx.yield %result : T
+//   })
+// ============================================================================
 
-        * thresholds and decisions will be exported to be tuned by out-of-tree autotuner.
+def decideOp : approx_Op<"decide"> {
+    let summary = "A Decide Op to mark the decision tree with runtime state computation.";
+    let description = [{
+        The `approx.decide` operation defines a decision tree for dynamic approximation.
+        
+        **State Region:**
+        - Receives `state_args` as block arguments
+        - Contains the call to user's getState function
+        - Must yield exactly one `i32` (the raw state value)
+        
+        **Lowering (in config-approx):**
+        1. Inline stateRegion to get the state value (i32)
+        2. Compare state against thresholds to compute branch index
+        3. Create scf.index_switch with one case per decision
+        4. Each case contains a transform op + cloned knob body
 
         Example (with pretty print):
 
         ```mlir
-        // %state has type f32
-        approx.decide (%state) {
-            decision_values = array<i32: 0, 1>,
-            decisions = array<i32: 0, 1>,
-            num_thresholds = 1,
-            thresholds = array<i32: 2>,
-            thresholds_lowers = array<i32: 0>,
-            thresholds_uppers = array<i32: 4>
-         } : f32
-        ```
-        Example (generic form, without pretty print):
-
-        ```mlir
-         "approx.decide"(%state) <{
-              decision_values = array<i32: 0, 1>,
-              decisions = array<i32: 0, 1>,
-              num_thresholds = 1 : i32,
-              thresholds = array<i32: 2>,
-              thresholds_lowers = array<i32: 0>,
-              thresholds_uppers = array<i32: 4>,
-            transform_type = "func_substitution"
-          }> : (f32) -> ()
+        approx.decide (%state) <{
+            thresholds = array<i32: 5, 10>,
+            decisions = array<i32: 0, 1, 2>,
+            transform_type = "loop_perforate",
+            ...
+        }> state {
+          ^bb0(%s: i32):
+            %v = func.call @getState(%s) : (i32) -> i32
+            approx.yield %v : i32
+        }
         ```
     }];
 
-    let arguments = (ins AnyType: $state,
-                         I32Attr: $num_thresholds,
-                         DenseI32ArrayAttr: $thresholds_uppers,
-                         DenseI32ArrayAttr: $thresholds_lowers,
-                         DenseI32ArrayAttr: $decision_values,
-                         DenseI32ArrayAttr: $thresholds,
-                         DenseI32ArrayAttr: $decisions,
-                         SymbolNameAttr: $transform_type
+    let arguments = (ins Variadic<AnyType>:$state_args,
+                         I32Attr:$num_thresholds,
+                         DenseI32ArrayAttr:$thresholds_uppers,
+                         DenseI32ArrayAttr:$thresholds_lowers,
+                         DenseI32ArrayAttr:$decision_values,
+                         DenseI32ArrayAttr:$thresholds,
+                         DenseI32ArrayAttr:$decisions,
+                         SymbolNameAttr:$transform_type
                         );
 
-    // Corrected assemblyFormat: Removed quotes around parentheses. Used backticks for colon.
-    let assemblyFormat = "`(` $state `)` attr-dict `:` type($state)";
+    // Region that computes state -> yields i32
+    let regions = (region SizedRegion<1>:$stateRegion);
 }
 
 def transformOp : approx_Op<"transform"> {
@@ -161,57 +180,9 @@ def transformOp : approx_Op<"transform"> {
             }
         2. loop_perforate:
             * loop perforate operates on scf.for loops. 
-            Example workload:
-            "approx.util.annotation.decision_tree"() <{decision_values = array<i32: 0, 1>, decisions = array<i32: 1, 2>, func_name = "base", num_thresholds = 1 : i32, thresholds = array<i32: 2>, thresholds_lowers = array<i32: 0>, thresholds_uppers = array<i32: 4>, transform_type = "loop_perforate"}> : () -> ()
-            llvm.mlir.global internal constant @str0("Base function result: %d\0A\00") {addr_space = 0 : i32}
-            llvm.func @printf(!llvm.ptr, ...) -> i32
-            func.func @base(%arg0: i32, %arg1: i32) -> i32 attributes {llvm.linkage = #llvm.linkage<external>} {
-                %c1 = arith.constant 1 : index
-                %c0_i32 = arith.constant 0 : i32
-                %0 = arith.index_cast %arg0 : i32 to index
-                %1 = scf.for %arg2 = %c1 to %0 step %c1 iter_args(%arg3 = %c0_i32) -> (i32) {
-                %2 = arith.index_cast %arg2 : index to i32
-                %3 = arith.muli %2, %arg1 : i32
-                %4 = arith.addi %arg3, %3 : i32
-                scf.yield %4 : i32
-                }
-                return %1 : i32
-            }
         3. func_substitute:
-            * func substitute operates on functions who are annotated with "approx.util.annotation.convert_to_call"() <{func_name = "base"}> : () -> ()
+            * func substitute operates on functions who are annotated with "approx.util.annotation.convert_to_call"
             * For each substution, the user must provide a approximate version of the function. 
-            Example workload:
-            "approx.util.annotation.decision_tree"() <{decision_values = array<i32: 0, 1>, decisions = array<i32: 0, 1>, func_name = "base", num_thresholds = 1 : i32, thresholds = array<i32: 2>, thresholds_lowers = array<i32: 0>, thresholds_uppers = array<i32: 4>, transform_type = "func_substitute"}> : () -> ()
-
-            "approx.util.annoatation.convert_to_call"() <{func_name = "base"}> : () -> ()
-
-            llvm.mlir.global internal constant @str0("Base function result: %d\0A\00") {addr_space = 0 : i32}
-            llvm.func @printf(!llvm.ptr, ...) -> i32
-            func.func @approx_base(%arg0: i32, %arg1: i32) -> i32 attributes {llvm.linkage = #llvm.linkage<external>} {
-                %c1 = arith.constant 1 : index
-                %c2 = arith.constant 2 : index
-                %c0_i32 = arith.constant 0 : i32
-                %0 = arith.index_cast %arg0 : i32 to index
-                %1 = scf.for %arg2 = %c1 to %0 step %c2 iter_args(%arg3 = %c0_i32) -> (i32) {
-                %2 = arith.index_cast %arg2 : index to i32
-                %3 = arith.muli %2, %arg1 : i32
-                %4 = arith.addi %arg3, %3 : i32
-                scf.yield %4 : i32
-                }
-                return %1 : i32
-            }
-            func.func @base(%arg0: i32, %arg1: i32) -> i32 attributes {llvm.linkage = #llvm.linkage<external>} {
-                %c1 = arith.constant 1 : index
-                %c0_i32 = arith.constant 0 : i32
-                %0 = arith.index_cast %arg0 : i32 to index
-                %1 = scf.for %arg2 = %c1 to %0 step %c1 iter_args(%arg3 = %c0_i32) -> (i32) {
-                %2 = arith.index_cast %arg2 : index to i32
-                %3 = arith.muli %2, %arg1 : i32
-                %4 = arith.addi %arg3, %3 : i32
-                scf.yield %4 : i32
-                }
-                return %1 : i32
-            }
         Example:
         ```mlir
              "approx.transform"() <{knob_val = 1 : i32, transform_type = "task_skipping"}> : () -> ()
@@ -244,40 +215,48 @@ def yieldOp : approx_Op<"yield", [Pure, Terminator]> {
     let assemblyFormat = [{  attr-dict ($results^ `:` type($results))? }];
 }
 
+// ============================================================================
+// knobOp - Pure scope wrapper for approximation region
+// ============================================================================
+//
+// The knobOp is a pure scope wrapper that defines the region to approximate.
+// It does NOT contain state or transform_type - those belong to management ops
+// (decideOp, TryOp, transformOp) that are placed inside the knob body.
+//
+// After all management ops are lowered, knobOp is inlined by finalize-approx.
+// ============================================================================
 
 def knobOp : approx_Op<"knob">  {
     let summary = "An error knob Op acting as a wrapper to the transformed Op / Graph.";
     let description = [{
-        The `approx.knob` operation illustrates how to define an error knob that characterizes the transformation of the internal Op / Graph. Error knob unqiuely determines how the internal Op will be lowered.
+        The `approx.knob` operation is a pure scope wrapper that defines the region
+        where approximation can be applied. It captures inputs and produces outputs.
 
-        Goal: 
-            * Define a decision tree and a (state -> decision) for transformation of the exact Op (i.e. the Op that will be lowered to approximate form).
-            * Define a specification to bridge the MLIR and out-of-tree reliability and QoS analysis tools.
+        Management operations (decideOp, TryOp, transformOp) are placed inside
+        the knob body to control how approximation is applied.
+
+        After all transformations are complete, the knobOp is inlined by the
+        finalize-approx pass.
 
         Components:
-            * Decision tree
-            * QoS spec
-            * Reliability spec 
-            * Safety checker
-            * Internal Op [The exact Op]
+            * QoS spec (QoS_in, QoS_out)
+            * Reliability spec (rf)
+            * Internal region containing exact code and management ops
         
-        I/O: [responsibility of front-end / codegen]
-            The input of this Op is the in edges (defs that will be used in the Op), the reliability spec (rf), QoS spec (QoS_in, QoS_out). 
-            The terminator will return all the out edges (defs in the Op that will be used) for the internal region. 
-
-        Internal Ops (in region):
-            The internal state of the Op is marked using ObserveOp, usually placed before the terminator of the Op.
-            The decision tree (mapping: state -> transformation) of transformation is mapped as a DecideOp, usually placed at the beginning of the Op.
-
-        Implementation Design Choice:
-            Choice 1: Have this KnobOp, and internally define how it should be tranformed. Here, knob_val [int] -> (dialect, Op, transformation) 
-            Choice 2: Use this Op as a template to define approxOp for each transformation. The output of decision tree (knob [int]) will directly select a transformation. (i.e. knob_val [int] -> transformation)
+        I/O:
+            The input of this Op is the in edges (defs that will be used in the Op).
+            The terminator (approx.yield) returns all the out edges.
     }];
 
-    let arguments = (ins AnyType:$state, I32Attr:$id, I32Attr:$rf, DenseI32ArrayAttr:$QoS_in, DenseI32ArrayAttr:$QoS_out, Variadic<AnyType>:$args, SymbolNameAttr: $transform_type);
+    let arguments = (ins 
+        Variadic<AnyType>:$args,
+        I32Attr:$id, 
+        I32Attr:$rf, 
+        DenseI32ArrayAttr:$QoS_in, 
+        DenseI32ArrayAttr:$QoS_out
+    );
     let results = (outs Variadic<AnyType>:$results);
     let regions = (region AnyRegion:$body);
-
 }
 
 // ------------------- Utility Ops ------------------- //
@@ -294,20 +273,37 @@ def utilAnnotationConvertToCallOp : approx_Op<"util.annotation.convert_to_call">
     let arguments = (ins SymbolNameAttr: $func_name);
 }
 
+// ============================================================================
+// utilAnnotationDecisionTreeOp - Annotation for dynamic approximation
+// ============================================================================
+//
+// This annotation is processed by emit-management pass to:
+// 1. Find the knobOp in the target function
+// 2. Create decideOp with stateRegion inside the knob body
+//
+// state_indices specifies which knob args are state variables.
+// state_function specifies the runtime function to call for state computation.
+// ============================================================================
+
 def utilAnnotationDecisionTreeOp : approx_Op<"util.annotation.decision_tree"> {
-    let summary = "A utility Op to support identifying the scope and the attribtues of the decision tree.";
+    let summary = "A utility Op to support identifying the scope and the attributes of the decision tree.";
     let description = [{
         This op annotates the modules to identify:
             * The function to inject decision tree
-            * a set of attributes that are identical to the attributes of the decision tree Op.
+            * Which arguments are state variables (state_indices)
+            * The runtime function for state computation (state_function)
+            * Decision tree parameters (thresholds, decisions, etc.)
         
-        By lowering this Op, the decision tree op will be injected to the module with the specified attributes.
+        By lowering this Op via emit-management pass, the decideOp will be 
+        injected into the knob body with a stateRegion calling state_function.
 
         Example:
         ```mlir
         "approx.util.annotation.decision_tree"() <{
-            decision_tree = "main",
+            func_name = "main",
             transform_type = "loop_perforate",
+            state_indices = array<i64: 2>,
+            state_function = "getState",
             num_thresholds = 1 : i32,
             thresholds_uppers = array<i32: 10>,
             thresholds_lowers = array<i32: 0>,
@@ -319,7 +315,9 @@ def utilAnnotationDecisionTreeOp : approx_Op<"util.annotation.decision_tree"> {
     }];
 
     let arguments = (ins SymbolNameAttr: $func_name,
-                         SymbolNameAttr: $transform_type,   
+                         SymbolNameAttr: $transform_type,
+                         DenseI64ArrayAttr: $state_indices,
+                         StrAttr: $state_function,
                          I32Attr: $num_thresholds,
                          DenseI32ArrayAttr: $thresholds_uppers,
                          DenseI32ArrayAttr: $thresholds_lowers,
@@ -328,10 +326,71 @@ def utilAnnotationDecisionTreeOp : approx_Op<"util.annotation.decision_tree"> {
                          DenseI32ArrayAttr: $decisions);
 }
 
+// ============================================================================
+// utilAnnotationKnobOp - Simple annotation to emit knobOp only
+// ============================================================================
+//
+// This annotation is for cases where you just want to wrap a function in a
+// knobOp without any management ops. Useful for manual/static approximation.
+// ============================================================================
+
+def utilAnnotationKnobOp : approx_Op<"util.annotation.knob"> {
+    let summary = "A utility Op to wrap a function body in a knobOp.";
+    let description = [{
+        This annotation wraps the target function's body in a knobOp.
+        No management ops are added - use this for manual approximation
+        or when adding management ops via other annotations.
+
+        Example:
+        ```mlir
+        "approx.util.annotation.knob"() <{func_name = "my_func"}> : () -> ()
+        ```
+    }];
+
+    let arguments = (ins SymbolNameAttr: $func_name);
+}
+
+// ============================================================================
+// utilAnnotationTransformOp - Static transform annotation
+// ============================================================================
+//
+// This annotation is processed by emit-management pass to inject a static
+// transformOp directly into the knob body. Use when you want a fixed
+// approximation without dynamic decision tree.
+// ============================================================================
+
+def utilAnnotationTransformOp : approx_Op<"util.annotation.transform"> {
+    let summary = "Annotation to inject static transform into a function's knob";
+    let description = [{
+        Marks a function for static approximation. The `emit-management` pass
+        processes this to inject a transformOp into the first KnobOp.
+        
+        **Attributes:**
+        - `func_name`: Function containing the KnobOp
+        - `transform_type`: Type of transformation (loop_perforate, etc.)
+        - `knob_val`: Approximation intensity value
+        
+        Example:
+        ```mlir
+        "approx.util.annotation.transform"() <{
+          func_name = "my_func",
+          transform_type = "loop_perforate",
+          knob_val = 2 : i32
+        }> : () -> ()
+        ```
+    }];
+
+    let arguments = (ins 
+        SymbolNameAttr:$func_name,
+        SymbolNameAttr:$transform_type,
+        I32Attr:$knob_val
+    );
+}
+
 def utilAnnotationTryOp : approx_Op<"util.annotation.try"> {
     let summary = "Annotation to inject try-check-recover into a function's knob";
     let description = [{
-        Marks a function for safety contract injection. The `emit-safety` pass
+        Marks a function for safety contract injection. The `emit-management` pass
         processes this to inject a TryOp into the first KnobOp.
         
         **Attributes:**
@@ -339,7 +398,7 @@ def utilAnnotationTryOp : approx_Op<"util.annotation.try"> {
         - `recover`: Recovery function name
         - `checker`: Checker function name
         
-        **Pass Behavior (`emit-safety`):**
+        **Pass Behavior (`emit-management`):**
         1. Find function by `func_name`
         2. Find first KnobOp in function
         3. Create TryOp before yield with check region calling `checker`
