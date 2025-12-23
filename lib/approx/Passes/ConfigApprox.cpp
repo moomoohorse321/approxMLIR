@@ -318,7 +318,7 @@ struct ConfigApproxPass : public impl::ConfigApproxPassBase<ConfigApproxPass> {
     patterns.add<FinalizeDecisionTree>(&getContext());
     patterns.add<ConfigureTry>(&getContext()); 
     GreedyRewriteConfig config;
-    config.setMaxIterations(1);
+    config.maxIterations = 1;
     (void)(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns), config));
   }
 };

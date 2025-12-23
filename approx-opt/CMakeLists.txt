@@ -8,12 +8,6 @@ set(LIBS
         MLIROptLib
         MLIRapprox
         MLIRApproxTransforms
-        
-        StablehloRegister
-        StablehloTestUtils
-        StablehloPasses
-        InterpreterOps
-        StablehloTOSATransforms
 )
 add_llvm_executable(approx-opt approx-opt.cpp)
 

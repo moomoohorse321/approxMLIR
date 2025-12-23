@@ -25,20 +25,20 @@
 #include "approx/Passes/Passes.h"
 
 
-#include "stablehlo/conversions/tosa/transforms/Passes.h"
-#include "stablehlo/dialect/Register.h"
-#include "stablehlo/reference/InterpreterOps.h"
-#include "stablehlo/tests/TestUtils.h"
-#include "stablehlo/transforms/Passes.h"
+// #include "stablehlo/conversions/tosa/transforms/Passes.h"
+// #include "stablehlo/dialect/Register.h"
+// #include "stablehlo/reference/InterpreterOps.h"
+// #include "stablehlo/tests/TestUtils.h"
+// #include "stablehlo/transforms/Passes.h"
 
 int main(int argc, char **argv) {
   mlir::registerAllPasses();
 
-  mlir::hlo::registerAllTestPasses();
-  mlir::stablehlo::registerPassPipelines();
-  mlir::stablehlo::registerPasses();
-  mlir::tosa::registerStablehloLegalizeToTosaPassPass();
-  mlir::tosa::registerStablehloPrepareForTosaPassPass();
+  // mlir::hlo::registerAllTestPasses();
+  // mlir::stablehlo::registerPassPipelines();
+  // mlir::stablehlo::registerPasses();
+  // mlir::tosa::registerStablehloLegalizeToTosaPassPass();
+  // mlir::tosa::registerStablehloPrepareForTosaPassPass();
   
   // Register approx passes
   mlir::registerEmitApproxPass();
@@ -50,8 +50,8 @@ int main(int argc, char **argv) {
 
   mlir::DialectRegistry registry;
   mlir::registerAllExtensions(registry);
-  mlir::stablehlo::registerAllDialects(registry);
-  registry.insert<mlir::stablehlo::interpreter::InterpreterDialect>();
+  // mlir::stablehlo::registerAllDialects(registry);
+  // registry.insert<mlir::stablehlo::interpreter::InterpreterDialect>();
   registry.insert<mlir::approx::approxDialect>();
   registry.insert<mlir::func::FuncDialect>();
   registry.insert<mlir::arith::ArithDialect>();

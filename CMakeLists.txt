@@ -84,11 +84,11 @@ list(APPEND CMAKE_MODULE_PATH "${APPROX_SOURCE_DIR}/cmake/modules")
 add_subdirectory(include)
 add_subdirectory(lib)
 
-if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-# only when standalone, we build test and external-dialects
-  add_subdirectory(test)
-  add_subdirectory(external-dialects/stablehlo)
-endif()
+# if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+# # only when standalone, we build test and external-dialects
+#   add_subdirectory(test)
+#   add_subdirectory(external-dialects/stablehlo)
+# endif()
 
 
 add_subdirectory(approx-opt)

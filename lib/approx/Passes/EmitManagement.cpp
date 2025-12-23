@@ -343,7 +343,7 @@ struct EmitManagementPass : public impl::EmitManagementPassBase<EmitManagementPa
     patterns.add<EmitTransformFromAnnotation>(&getContext());
     
     GreedyRewriteConfig config;
-    config.setMaxIterations(10);
+    config.maxIterations = 10;
     
     if (failed(applyPatternsAndFoldGreedily(getOperation(), 
                                              std::move(patterns), config))) {

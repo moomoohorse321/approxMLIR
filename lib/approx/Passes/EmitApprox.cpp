@@ -290,7 +290,7 @@ struct EmitApproxPass : public impl::EmitApproxPassBase<EmitApproxPass> {
     patterns.add<EmitKnobFromDecisionTreeAnnotation>(&getContext());
     patterns.add<EmitKnobFromKnobAnnotation>(&getContext());
     GreedyRewriteConfig config;
-    config.setMaxIterations(1);
+    config.maxIterations = 1;
     (void)(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns), config));
   }
 };
