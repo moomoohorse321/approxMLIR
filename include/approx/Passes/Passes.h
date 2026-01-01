@@ -5,9 +5,14 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h" 
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "approx/Dialect.h"
+
+
+#include "stablehlo/dialect/StablehloOps.h"
 
 #include <memory>
 
@@ -34,6 +39,7 @@ namespace mlir {
         std::unique_ptr<Pass> createPreEmitTransformationPass();
         std::unique_ptr<Pass> createTransformApproxPass();
         std::unique_ptr<Pass> createFinalizeApproxPass();
+        std::unique_ptr<Pass> createLegalizeToStablehloPass();
    } // namespace approx
 } // namespace mlir
 

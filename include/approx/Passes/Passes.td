@@ -79,7 +79,9 @@ def EmitManagementPass : Pass<"emit-management"> {
   let dependentDialects = [
     "mlir::func::FuncDialect",
     "mlir::scf::SCFDialect", 
-    "mlir::approx::approxDialect"
+    "mlir::approx::approxDialect",
+    "mlir::tensor::TensorDialect", 
+    "mlir::arith::ArithDialect" 
   ];
 }
 
@@ -130,6 +132,25 @@ def FinalizeApproxPass : Pass<"finalize-approx"> {
   }];
   let constructor = "mlir::approx::createFinalizeApproxPass()";
   let dependentDialects = ["mlir::approx::approxDialect"];
+}
+
+def LegalizeToStablehloPass : Pass<"legalize-to-stablehlo"> {
+  let summary = "Lower scf.index_switch to stablehlo.case";
+  let description = [{
+    Currently, it converts scf.index_switch operations into stablehlo.case operations.
+    This is useful for IREE deployment to avoid issues with scf.index_switch 
+    support in the Stream conversion phase.
+    
+    It assumes dense cases (0, 1, 2...) for simplicity. It maps the 'default'
+    region to the last branch of the stablehlo.case op.
+  }];
+  let constructor = "mlir::approx::createLegalizeToStablehloPass()";
+  let dependentDialects = [
+    "mlir::scf::SCFDialect",
+    "mlir::arith::ArithDialect",
+    "mlir::tensor::TensorDialect",
+    "mlir::stablehlo::StablehloDialect"
+  ];
 }
 
 #endif // APPROX_PASSES

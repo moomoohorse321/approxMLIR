@@ -6,6 +6,7 @@ add_mlir_dialect_library(MLIRApproxTransforms
   ConfigApprox.cpp
   TransformApprox.cpp
   FinalizeApprox.cpp
+  LegalizeToStablehlo.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Dialect/Affine
@@ -41,6 +42,7 @@ add_mlir_dialect_library(MLIRApproxTransforms
   MLIRFuncToLLVM
   MLIRArithToLLVM
   MLIROpenMPToLLVM
+  StablehloOps
 )
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
