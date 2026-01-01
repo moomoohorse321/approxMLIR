@@ -1,0 +1,142 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index bf6fa9fa84..ee0f1ded54 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -477,6 +477,7 @@ cmake_dependent_option(IREE_TARGET_BACKEND_WEBGPU_SPIRV "Enables the 'webgpu' co
+ cmake_dependent_option(IREE_INPUT_STABLEHLO "Builds support for compiling StableHLO programs" ON ${IREE_BUILD_COMPILER} OFF)
+ cmake_dependent_option(IREE_INPUT_TORCH "Builds support for compiling Torch MLIR programs" ON ${IREE_BUILD_COMPILER} OFF)
+ cmake_dependent_option(IREE_INPUT_TOSA "Builds support for compiling TOSA programs" ON ${IREE_BUILD_COMPILER} OFF)
++cmake_dependent_option(IREE_INPUT_APPROX "Builds support for compiling Approx programs" ON ${IREE_BUILD_COMPILER} OFF)
+ 
+ if(IREE_BUILD_COMPILER)
+   message(STATUS "IREE compiler input dialects:")
+@@ -489,6 +490,9 @@ if(IREE_BUILD_COMPILER)
+   if(IREE_INPUT_TOSA)
+     message(STATUS "  - TOSA")
+   endif()
++  if(IREE_INPUT_APPROX)
++    message(STATUS "  - Approx")
++  endif()
+ endif()
+ 
+ #-------------------------------------------------------------------------------
+@@ -1084,6 +1088,8 @@ if(IREE_TARGET_BACKEND_METAL_SPIRV)
+   iree_add_spirv_cross_subdirectory()
+ endif()
+ 
++add_subdirectory(third_party/approxMLIR EXCLUDE_FROM_ALL)
++
+ #-------------------------------------------------------------------------------
+ # IREE top-level libraries
+ #-------------------------------------------------------------------------------
+diff --git a/compiler/plugins/input/Approx/CMakeLists.txt b/compiler/plugins/input/Approx/CMakeLists.txt
+new file mode 100644
+index 0000000000..c041cc480d
+--- /dev/null
++++ b/compiler/plugins/input/Approx/CMakeLists.txt
+@@ -0,0 +1,31 @@
++# Copyright 2024 The IREE Authors
++#
++# Licensed under the Apache License v2.0 with LLVM Exceptions.
++# See https://llvm.org/LICENSE.txt for license information.
++# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++
++# Approx Input Plugin for IREE
++# This plugin registers the approx dialect and passes with IREE
++iree_add_all_subdirs()
++
++iree_compiler_register_plugin(
++  PLUGIN_ID
++    input_approx
++  TARGET
++    ::registration
++)
++
++iree_cc_library(
++  NAME
++    registration
++  SRCS
++    "PluginRegistration.cpp"
++  DEPS
++    MLIRapprox
++    MLIRApproxTransforms
++    MLIRIR
++    MLIRPass
++    MLIRSupport
++    iree::compiler::PluginAPI
++  PUBLIC
++)
+\ No newline at end of file
+diff --git a/compiler/plugins/input/Approx/PluginRegistration.cpp b/compiler/plugins/input/Approx/PluginRegistration.cpp
+new file mode 100644
+index 0000000000..0d2f58fbcb
+--- /dev/null
++++ b/compiler/plugins/input/Approx/PluginRegistration.cpp
+@@ -0,0 +1,51 @@
++// PluginRegistration.cpp - ACTUALLY CORRECTED
++
++#include "iree/compiler/PluginAPI/Client.h"
++#include "mlir/IR/BuiltinOps.h"
++#include "mlir/Pass/PassManager.h"
++
++#include "approx/Dialect.h"
++#include "approx/Ops.h"
++#include "approx/Passes/Passes.h"
++
++namespace mlir::iree_compiler::approx {
++
++namespace {
++
++struct ApproxOptions {
++  void bindOptions(OptionsBinder &binder) {}
++};
++
++struct ApproxSession
++    : public PluginSession<ApproxSession, ApproxOptions,
++                           PluginActivationPolicy::DefaultActivated> {
++  
++  // Called at startup to register passes
++  static void registerPasses() {
++    mlir::registerEmitApproxPass();
++    mlir::registerEmitManagementPass();
++    mlir::registerConfigApproxPass();
++    mlir::registerTransformApproxPass();
++    mlir::registerPreEmitTransformationPass();
++    mlir::registerFinalizeApproxPass();
++  }
++
++  // Called to register dialects - correct method name!
++  void onRegisterDialects(DialectRegistry &registry) override {
++    registry.insert<mlir::approx::approxDialect>();
++  }
++};
++
++} // namespace
++
++} // namespace mlir::iree_compiler::approx
++
++IREE_DEFINE_COMPILER_OPTION_FLAGS(
++    ::mlir::iree_compiler::approx::ApproxOptions);
++
++extern "C" bool iree_register_compiler_plugin_input_approx(
++    mlir::iree_compiler::PluginRegistrar *registrar) {
++  registrar->registerPlugin<::mlir::iree_compiler::approx::ApproxSession>(
++      "input_approx");
++  return true;
++}
+\ No newline at end of file
+diff --git a/compiler/plugins/iree_compiler_plugin.cmake b/compiler/plugins/iree_compiler_plugin.cmake
+index 9c0d7fd2f7..edb3e19e7d 100644
+--- a/compiler/plugins/iree_compiler_plugin.cmake
++++ b/compiler/plugins/iree_compiler_plugin.cmake
+@@ -16,6 +16,10 @@ if(IREE_INPUT_TOSA)
+   add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/input/TOSA input/TOSA)
+ endif()
+ 
++if(IREE_INPUT_APPROX)
++  add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/input/Approx input/Approx)
++endif()
++
+ if(IREE_TARGET_BACKEND_CUDA)
+   add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/target/CUDA target/CUDA)
+ endif()

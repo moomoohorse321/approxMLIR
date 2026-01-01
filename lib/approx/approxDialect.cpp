@@ -22,3 +22,5 @@ void approxDialect::initialize() {
 #include "approx/approxOps.cpp.inc"
       >();
 }
+
+#include "approx/approxOpsDialect.cpp.inc"
