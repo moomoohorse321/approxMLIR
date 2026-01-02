@@ -128,10 +128,10 @@ if transformed:
     print(f"\n--- Step 5: Deploying via IREE ---")
     
     # Compile to IREE VM flatbuffer
-    vmfb = ar.compile_to_iree(transformed, backend='llvm-cpu', input_type=None)
+    vmfb = ar.compile_to_iree(transformed, backend='cuda')
     
     # Load module - returns (modules, device) tuple
-    modules, device = ar.load_module(vmfb, backend='llvm-cpu')
+    modules, device = ar.load_module(vmfb, backend='cuda')
     print("✓ IREE deployment successful!")
     
     # Test the module with different state values

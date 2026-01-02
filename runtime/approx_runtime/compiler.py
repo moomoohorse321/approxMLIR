@@ -56,6 +56,10 @@ def get_pipeline_for_config(config: dict) -> List[str]:
     if st and st.transform_type == "func_substitute":
         return FUNC_SUBSTITUTE_PIPELINE
     
+    sc = config.get('safety_contract')
+    if sc:
+        return PASS_PIPELINE[:-1]
+    
     return PASS_PIPELINE
 
 
