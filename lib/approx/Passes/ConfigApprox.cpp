@@ -93,11 +93,11 @@ struct ConfigureDecisionTree : public OpRewritePattern<approx::decideOp> {
                                 PatternRewriter &rewriter) const final {
     llvm::ArrayRef<int> thresholds = decideOp.getThresholds();
     llvm::ArrayRef<int> decisions = decideOp.getDecisions();
-    llvm::ArrayRef<int> thresholds_l = decideOp.getThresholdsLowers();
-    llvm::ArrayRef<int> thresholds_u = decideOp.getThresholdsUppers();
+    // llvm::ArrayRef<int> thresholds_l = decideOp.getThresholdsLowers();
+    // llvm::ArrayRef<int> thresholds_u = decideOp.getThresholdsUppers();
 
-    assert(thresholds_l.size() == 1 && thresholds_u.size() == 1 &&
-           "Currently only support 1 dim feature");
+    // assert(thresholds_l.size() == 1 && thresholds_u.size() == 1 &&
+    //        "Currently only support 1 dim feature");
     assert(decisions.size() == thresholds.size() + 1 &&
            "Number of decisions should be number of thresholds + 1");
 

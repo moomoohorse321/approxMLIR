@@ -37,6 +37,19 @@ from .iree import (
     IREE_AVAILABLE,
 )
 
+# Auto-tuning support (requires: pip install opentuner)
+
+from .tuner_config import (
+    TunableParam,
+    MLIRConfigManager,
+)
+
+from .tuner import (
+    ApproxTunerInterface,
+    tune,
+    create_tuner_arg_parser,
+)
+
 __version__ = "0.1.0"
 
 __all__ = [
@@ -67,4 +80,11 @@ __all__ = [
     'compile_to_iree',
     'load_module',
     'IREE_AVAILABLE',
+    # Auto-tuning
+    'TUNER_AVAILABLE',
+    'TunableParam',
+    'MLIRConfigManager',
+    'ApproxTunerInterface',
+    'tune',
+    'create_tuner_arg_parser',
 ]

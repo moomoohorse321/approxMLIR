@@ -11,9 +11,16 @@ requires-python = ">=3.9"
 dependencies = []
 
 [project.optional-dependencies]
-jax = ["jax>=0.4.0", "jaxlib>=0.4.0"]
-iree = ["iree-compiler", "iree-runtime"]
-all = ["jax>=0.4.0", "jaxlib>=0.4.0", "iree-compiler", "iree-runtime"]
+jax = ["jax", "jaxlib"]
+iree = ["iree-base-compiler==3.9.0", "iree-base-runtime==3.9.0"]
+tuning = ["opentuner>=0.8.0"]
+all = [
+    "jax",
+    "jaxlib",
+    "iree-base-compiler==3.9.0",
+    "iree-base-runtime==3.9.0",
+    "opentuner>=0.8.0",
+]
 dev = ["pytest>=7.0"]
 
 [tool.pytest.ini_options]
