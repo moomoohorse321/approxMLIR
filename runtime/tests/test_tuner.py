@@ -16,17 +16,12 @@ import pytest
 from unittest.mock import Mock, MagicMock, patch
 import tempfile
 import os
-import sys
 
-# Add current directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from approx_runtime.tuner_config import MLIRConfigManager, TunableParam
+from approx_runtime.tuner import ApproxTunerInterface, tune, create_tuner_arg_parser
 
-# Import the tuning module components directly (not via __init__.py)
-from tuner_config import MLIRConfigManager, TunableParam
-
-# Try to import OpenTuner-dependent components
 try:
-    from tuner import ApproxTunerInterface, tune, create_tuner_arg_parser
+    import opentuner  # noqa: F401
     OPENTUNER_AVAILABLE = True
 except ImportError:
     OPENTUNER_AVAILABLE = False

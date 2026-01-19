@@ -6,6 +6,7 @@ import re
 __all__ = [
     'generate_annotations', 
     'inject_annotations',
+    'inject_annotations_text',
     'collect_helper_functions',
     'needs_pre_emit_transform',
 ]
@@ -162,3 +163,47 @@ def inject_annotations(mlir_text: str, func_name: str, config: dict) -> str:
     
     # Fallback: prepend to file
     return annotations + '\n' + mlir_text
+
+
+def inject_annotations_text(mlir_text: str, annotations_text: str) -> str:
+    """Insert raw annotation ops at the start of the MLIR module.
+
+    Args:
+        mlir_text: Original MLIR module text
+        annotations_text: MLIR ops to insert (no module wrapper)
+
+    Returns:
+        MLIR text with annotations inserted after 'module ... {'
+    """
+    if not annotations_text.strip():
+        return mlir_text
+
+    annotations = annotations_text
+    if annotations.startswith("\ufeff"):
+        annotations = annotations.lstrip("\ufeff")
+    if not annotations.endswith("\n"):
+        annotations += "\n"
+
+    module_pattern = r'(module\s*(?:@[\w]+\s*)?(?:attributes\s*\{[^}]*\}\s*)?\{)'
+    match = re.search(module_pattern, mlir_text)
+    if not match:
+        return annotations + mlir_text
+
+    insert_pos = match.end()
+
+    # Detect indentation from the first non-empty line after module opener.
+    indent = "  "
+    tail = mlir_text[insert_pos:]
+    for line in tail.splitlines():
+        if line.strip() and line.strip() != "}":
+            indent = re.match(r"[ \t]*", line).group(0)
+            break
+
+    indented = "\n".join(
+        (indent + ln) if ln.strip() else ""
+        for ln in annotations.splitlines()
+    )
+    if not indented.endswith("\n"):
+        indented += "\n"
+
+    return mlir_text[:insert_pos] + "\n" + indented + mlir_text[insert_pos:]

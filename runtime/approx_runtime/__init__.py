@@ -11,6 +11,7 @@ from .knob import (
 from .mlir_gen import (
     generate_annotations,
     inject_annotations,
+    inject_annotations_text,
     collect_helper_functions,
     needs_pre_emit_transform,
 )
@@ -22,6 +23,8 @@ from .compiler import (
     FUNC_SUBSTITUTE_PIPELINE,
     CompilationError,
     get_pipeline_for_config,
+    WorkloadType,
+    ToolchainConfig,
 )
 
 from .export import (
@@ -48,6 +51,32 @@ from .tuner import (
     ApproxTunerInterface,
     tune,
     create_tuner_arg_parser,
+    tune_jax,
+    tune_cpp,
+)
+
+from .toolchain import (
+    get_toolchain,
+    set_toolchain,
+)
+
+from .cpp_annotation import (
+    CppAnnotation,
+    AnnotationSyntaxError,
+    parse_cpp_annotations,
+    generate_cpp_annotation_mlir,
+    parse_and_generate,
+)
+
+from .cpp_pipeline import (
+    CgeistConfig,
+    compile_cpp_source,
+)
+
+from .annotate import (
+    with_config,
+    export_with_config,
+    export_module_with_configs,
 )
 
 __version__ = "0.1.0"
@@ -62,6 +91,7 @@ __all__ = [
     # MLIR generation
     'generate_annotations',
     'inject_annotations',
+    'inject_annotations_text',
     'collect_helper_functions',
     'needs_pre_emit_transform',
     # Compiler
@@ -71,6 +101,8 @@ __all__ = [
     'FUNC_SUBSTITUTE_PIPELINE',
     'CompilationError',
     'get_pipeline_for_config',
+    'WorkloadType',
+    'ToolchainConfig',
     # JAX export
     'export_to_mlir',
     'export_module',
@@ -87,4 +119,22 @@ __all__ = [
     'ApproxTunerInterface',
     'tune',
     'create_tuner_arg_parser',
+    'tune_jax',
+    'tune_cpp',
+    # Toolchain
+    'get_toolchain',
+    'set_toolchain',
+    # C++ annotations
+    'CppAnnotation',
+    'AnnotationSyntaxError',
+    'parse_cpp_annotations',
+    'generate_cpp_annotation_mlir',
+    'parse_and_generate',
+    # C++ pipeline
+    'CgeistConfig',
+    'compile_cpp_source',
+    # Non-invasive JAX API
+    'with_config',
+    'export_with_config',
+    'export_module_with_configs',
 ]

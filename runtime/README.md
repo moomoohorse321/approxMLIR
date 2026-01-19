@@ -46,6 +46,62 @@ module = ar.load_module(vmfb, backend="cuda")
 result = module.my_kernel(n, data)
 ```
 
+## Toolchains
+
+ApproxMLIR supports separate toolchains for ML (StableHLO/IREE) and C++ (Polygeist).
+
+Environment variables:
+- `APPROX_OPT_ML` (default: `approx-opt`)
+- `APPROX_OPT_CPP` (default: `approx-opt-cpp`)
+
+Example:
+```python
+import approx_runtime as ar
+compiled = ar.compile(mlir_text, workload=ar.WorkloadType.CPP)
+```
+
+## Non-Invasive JAX API
+
+Apply configurations at call-time without decorators:
+
+```python
+import approx_runtime as ar
+
+config = {
+    "decision_tree": ar.DecisionTree(
+        state_function=get_state,
+        state_indices=[0],
+        thresholds=[100],
+        decisions=[0, 1],
+        transform_type="loop_perforate",
+    )
+}
+
+mlir = ar.export_with_config(my_kernel, (x_shape,), config)
+```
+
+## C++ Comment-Driven Annotations
+
+Add structured comments to C/C++ source and generate MLIR annotations:
+
+```c
+// @approx:decision_tree {
+//   transform_type: func_substitute
+//   state_indices: [-1]
+//   state_function: getState
+//   thresholds: [5, 10]
+//   decisions: [0, 1, 2]
+// }
+void my_kernel(float* data, int n, int state) { ... }
+```
+
+```python
+import approx_runtime as ar
+
+annotations = ar.parse_and_generate(cpp_source)
+annotated_mlir = ar.inject_annotations_text(base_mlir, annotations)
+```
+
 ## Approximation Types
 
 ### Decision Tree (Dynamic)
