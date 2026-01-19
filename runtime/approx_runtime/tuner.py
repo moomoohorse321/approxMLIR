@@ -48,8 +48,17 @@ import logging
 from typing import Callable, Dict, Tuple, Optional, Any
 
 from .tuner_config import MLIRConfigManager, TunableParam
+from .annotate import export_with_config
+from .cpp_annotation import parse_and_generate
+from .mlir_gen import inject_annotations_text
 
-__all__ = ['ApproxTunerInterface', 'tune', 'create_tuner_arg_parser']
+__all__ = [
+    'ApproxTunerInterface',
+    'tune',
+    'create_tuner_arg_parser',
+    'tune_jax',
+    'tune_cpp',
+]
 
 log = logging.getLogger("approx_tuner")
 
@@ -407,3 +416,29 @@ def tune(
     )
     
     return tuner.run_tuning()
+
+
+def tune_jax(
+    func,
+    example_args,
+    config: dict,
+    evaluate_fn: Callable[[Dict[str, int]], Tuple[float, float]],
+    accuracy_threshold: float = 0.9,
+    **kwargs,
+) -> Dict[str, Any]:
+    """Auto-tune a JAX function with approximation config."""
+    mlir_source = export_with_config(func, example_args, config)
+    return tune(mlir_source, evaluate_fn, accuracy_threshold, **kwargs)
+
+
+def tune_cpp(
+    cpp_source: str,
+    mlir_text: str,
+    evaluate_fn: Callable[[Dict[str, int]], Tuple[float, float]],
+    accuracy_threshold: float = 0.9,
+    **kwargs,
+) -> Dict[str, Any]:
+    """Auto-tune C++ code with auto-generated annotations."""
+    annotations = parse_and_generate(cpp_source)
+    mlir_annotated = inject_annotations_text(mlir_text, annotations)
+    return tune(mlir_annotated, evaluate_fn, accuracy_threshold, **kwargs)

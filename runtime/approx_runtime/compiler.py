@@ -4,6 +4,9 @@ import subprocess
 import tempfile
 from typing import List, Optional
 from pathlib import Path
+import warnings
+
+from .toolchain import WorkloadType, ToolchainConfig, get_toolchain
 
 __all__ = [
     'compile', 
@@ -12,31 +15,16 @@ __all__ = [
     'FUNC_SUBSTITUTE_PIPELINE', 
     'CompilationError',
     'get_pipeline_for_config',
+    'WorkloadType',
+    'ToolchainConfig',
 ]
 
 
-# Default pass pipeline for full approximation lowering
-PASS_PIPELINE = [
-    "emit-approx",
-    "emit-management",
-    "config-approx",
-    "transform-approx",
-    "finalize-approx",
-    "legalize-to-stablehlo"
-]
+# Default pass pipeline for full approximation lowering (ML toolchain).
+PASS_PIPELINE = ToolchainConfig().ml_pipeline
 
-# Pipeline when func_substitute is used (needs pre-emit-transform first)
-# pre-emit-transform converts: func @f { body } 
-#   -> func @__internal_f { body } + func @f { call @__internal_f }
-FUNC_SUBSTITUTE_PIPELINE = [
-    "pre-emit-transform",  # Refactor target func to wrapper + __internal_
-    "emit-approx",
-    "emit-management", 
-    "config-approx",
-    "transform-approx",
-    "finalize-approx",
-    "legalize-to-stablehlo"
-]
+# Pipeline when func_substitute is used (needs pre-emit-transform first).
+FUNC_SUBSTITUTE_PIPELINE = ["pre-emit-transform"] + PASS_PIPELINE
 
 
 def get_pipeline_for_config(config: dict) -> List[str]:
@@ -45,22 +33,8 @@ def get_pipeline_for_config(config: dict) -> List[str]:
     Returns FUNC_SUBSTITUTE_PIPELINE if func_substitute transform is used,
     otherwise returns standard PASS_PIPELINE.
     """
-    if not config:
-        return PASS_PIPELINE
-    
-    dt = config.get('decision_tree')
-    if dt and dt.transform_type == "func_substitute":
-        return FUNC_SUBSTITUTE_PIPELINE
-    
-    st = config.get('static_transform')
-    if st and st.transform_type == "func_substitute":
-        return FUNC_SUBSTITUTE_PIPELINE
-    
-    sc = config.get('safety_contract')
-    if sc:
-        return PASS_PIPELINE[:-1]
-    
-    return PASS_PIPELINE
+    toolchain = get_toolchain()
+    return toolchain.get_pipeline(WorkloadType.ML, config)
 
 
 class CompilationError(Exception):
@@ -68,17 +42,42 @@ class CompilationError(Exception):
     pass
 
 
+def _resolve_toolchain(
+    passes: Optional[List[str]],
+    approx_opt_path: Optional[str],
+    workload: WorkloadType,
+    toolchain: Optional[ToolchainConfig],
+) -> tuple[str, List[str]]:
+    toolchain = toolchain or get_toolchain()
+    if approx_opt_path is not None:
+        warnings.warn(
+            "approx_opt_path is deprecated. Use toolchain config instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        opt_path = approx_opt_path
+    else:
+        opt_path = toolchain.get_opt_path(workload)
+
+    pipeline = passes or toolchain.get_pipeline(workload)
+    return opt_path, pipeline
+
+
 def compile(
     mlir_text: str,
     passes: Optional[List[str]] = None,
-    approx_opt_path: str = "approx-opt",
+    approx_opt_path: Optional[str] = None,
+    workload: WorkloadType = WorkloadType.ML,
+    toolchain: Optional[ToolchainConfig] = None,
 ) -> str:
     """Run approx-opt on MLIR text.
     
     Args:
         mlir_text: Input MLIR module text
         passes: List of passes to run (default: PASS_PIPELINE)
-        approx_opt_path: Path to approx-opt binary
+        approx_opt_path: Deprecated: Path to approx-opt binary
+        workload: Type of workload (ML or CPP)
+        toolchain: Toolchain configuration (default: global config)
     
     Returns:
         Transformed MLIR text
@@ -86,7 +85,9 @@ def compile(
     Raises:
         CompilationError: If approx-opt fails
     """
-    passes = passes or PASS_PIPELINE
+    opt_path, passes = _resolve_toolchain(
+        passes, approx_opt_path, workload, toolchain
+    )
     
     with tempfile.NamedTemporaryFile(
         suffix='.mlir', mode='w', delete=False
@@ -96,7 +97,7 @@ def compile(
         input_path = f.name
         print(input_path)
     try:
-        cmd = [approx_opt_path, input_path] + [f'--{p}' for p in passes]
+        cmd = [opt_path, input_path] + [f'--{p}' for p in passes]
         result = subprocess.run(cmd, capture_output=True, text=True)
         
         if result.returncode != 0:
@@ -113,7 +114,9 @@ def compile_file(
     input_path: str,
     output_path: Optional[str] = None,
     passes: Optional[List[str]] = None,
-    approx_opt_path: str = "approx-opt",
+    approx_opt_path: Optional[str] = None,
+    workload: WorkloadType = WorkloadType.ML,
+    toolchain: Optional[ToolchainConfig] = None,
 ) -> str:
     """Run approx-opt on an MLIR file.
     
@@ -121,7 +124,9 @@ def compile_file(
         input_path: Path to input MLIR file
         output_path: Path for output (if None, returns stdout)
         passes: List of passes to run (default: PASS_PIPELINE)
-        approx_opt_path: Path to approx-opt binary
+        approx_opt_path: Deprecated: Path to approx-opt binary
+        workload: Type of workload (ML or CPP)
+        toolchain: Toolchain configuration (default: global config)
     
     Returns:
         Transformed MLIR text (or output_path if specified)
@@ -129,9 +134,11 @@ def compile_file(
     Raises:
         CompilationError: If approx-opt fails
     """
-    passes = passes or PASS_PIPELINE
+    opt_path, passes = _resolve_toolchain(
+        passes, approx_opt_path, workload, toolchain
+    )
     
-    cmd = [approx_opt_path, input_path] + [f'--{p}' for p in passes]
+    cmd = [opt_path, input_path] + [f'--{p}' for p in passes]
     if output_path:
         cmd.extend(['-o', output_path])
     

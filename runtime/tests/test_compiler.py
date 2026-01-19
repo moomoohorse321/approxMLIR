@@ -31,6 +31,7 @@ class TestPassPipeline:
             "config-approx",
             "transform-approx",
             "finalize-approx",
+            "legalize-to-stablehlo",
         ]
         assert PASS_PIPELINE == expected
     
@@ -42,6 +43,7 @@ class TestPassPipeline:
             "config-approx",
             "transform-approx",
             "finalize-approx",
+            "legalize-to-stablehlo",
         ]
         assert FUNC_SUBSTITUTE_PIPELINE == expected
 
