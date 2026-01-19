@@ -92,6 +92,11 @@ struct FunctionSubstitution : public OpRewritePattern<approx::transformOp> {
     Operation* parentFuncOp = transformOp; 
     int32_t decisionValue = transformOp.getKnobVal();
 
+    if(!decisionValue) { // fall back to the exact form
+      rewriter.eraseOp(transformOp);
+      return success();
+    }
+
     while(!dyn_cast<func::FuncOp>(parentFuncOp->getParentOp())) 
       parentFuncOp = parentFuncOp->getParentOp();
     parentFuncOp = parentFuncOp->getParentOp();

@@ -19,6 +19,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -132,24 +133,53 @@ struct EmitDecideFromAnnotation
     
     // 7. Create the call to state_function inside the state region
     rewriter.setInsertionPointToStart(stateBlock);
-    
-    // Collect block arguments to pass to state function
+
+    // Lookup function to get correct return type (e.g., tensor<i32>)
+    auto stateFuncOp = moduleOp.lookupSymbol<func::FuncOp>(stateFunctionName);
+    if (!stateFuncOp || stateFuncOp.getNumResults() != 1) {
+      return annotationOp.emitOpError("State function '") 
+             << stateFunctionName << "' not found or invalid";
+    }
+
+    // Pass block args to the call
     SmallVector<Value> callArgs;
     for (BlockArgument blockArg : stateBlock->getArguments()) {
       callArgs.push_back(blockArg);
     }
-    
-    // Call the state function - it should return i32
+
+    // Use inferred return type from the function definition
     auto stateCall = rewriter.create<func::CallOp>(
         loc,
-        rewriter.getI32Type(),
+        stateFuncOp.getResultTypes(), 
         SymbolRefAttr::get(rewriter.getContext(), stateFunctionName),
         callArgs
     );
-    
-    // 8. Yield the state value (i32)
-    rewriter.create<approx::yieldOp>(loc, stateCall.getResults());
-    
+
+    Value stateVal = stateCall.getResult(0);
+
+    // [FIX] Normalize to Scalar (Tensor -> Primitive extraction)
+    if (auto tensorTy = dyn_cast<TensorType>(stateVal.getType())) {
+      
+      // A. Assert single element constraints
+      if (tensorTy.hasStaticShape() && tensorTy.getNumElements() != 1) {
+        return annotationOp.emitOpError("State function must return a scalar or single-element tensor. Got: ") 
+               << tensorTy;
+      }
+
+      // B. Extract the scalar
+      if (tensorTy.getRank() == 0) {
+        // Case: tensor<i32> -> i32
+        stateVal = rewriter.create<tensor::ExtractOp>(loc, stateVal, ValueRange{});
+      } else {
+        // Case: tensor<1xi32> -> i32
+        Value idx = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+        stateVal = rewriter.create<tensor::ExtractOp>(loc, stateVal, ValueRange{idx});
+      }
+    }
+
+    // 8. Yield the scalar (now guaranteed to be primitive i32 if extraction succeeded)
+    rewriter.create<approx::yieldOp>(loc, stateVal);
+
     // 9. Erase the annotation
     rewriter.eraseOp(annotationOp);
     

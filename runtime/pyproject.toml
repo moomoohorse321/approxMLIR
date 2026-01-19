@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "approx-runtime"
+version = "0.1.0"
+description = "Python interface for ApproxMLIR compiler toolchain"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+jax = ["jax", "jaxlib"]
+iree = ["iree-base-compiler==3.9.0", "iree-base-runtime==3.9.0"]
+tuning = ["opentuner>=0.8.0"]
+all = [
+    "jax",
+    "jaxlib",
+    "iree-base-compiler==3.9.0",
+    "iree-base-runtime==3.9.0",
+    "opentuner>=0.8.0",
+]
+dev = ["pytest>=7.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
