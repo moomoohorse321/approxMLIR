@@ -34,8 +34,9 @@ def compile_cpp_source(
     *,
     cgeist_config: Optional[CgeistConfig] = None,
     toolchain: Optional[ToolchainConfig] = None,
+    emit: str = "transformed",
 ) -> str:
-    """Run cgeist, inject annotations, and run CPP approx-opt pipeline.
+    """Run cgeist, inject annotations, and optionally run CPP approx-opt pipeline.
 
     Args:
         cpp_source: C/C++ source text with @approx comments
@@ -43,10 +44,14 @@ def compile_cpp_source(
         toolchain: Toolchain configuration (default: global config)
 
     Returns:
-        Transformed MLIR text after CPP approx-opt pipeline
+        MLIR text. If emit == "annotated", returns annotated MLIR before approx-opt.
+        If emit == "transformed", returns MLIR after CPP approx-opt pipeline.
     """
     cgeist_config = cgeist_config or CgeistConfig()
     toolchain = toolchain or get_toolchain()
+
+    if emit not in ("annotated", "transformed"):
+        raise ValueError("emit must be 'annotated' or 'transformed'")
 
     with tempfile.NamedTemporaryFile(
         suffix=".c", mode="w", delete=False
@@ -75,6 +80,8 @@ def compile_cpp_source(
         base_mlir = cgeist_result.stdout
         annotations = parse_and_generate(cpp_source)
         annotated = inject_annotations_text(base_mlir, annotations)
+        if emit == "annotated":
+            return annotated
 
         cpp_passes = toolchain.get_pipeline(WorkloadType.CPP)
         approx_opt_path = toolchain.get_opt_path(WorkloadType.CPP)

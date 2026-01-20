@@ -95,7 +95,6 @@ def compile(
         f.write(mlir_text)
         f.flush()
         input_path = f.name
-        print(input_path)
     try:
         cmd = [opt_path, input_path] + [f'--{p}' for p in passes]
         result = subprocess.run(cmd, capture_output=True, text=True)

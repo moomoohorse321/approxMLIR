@@ -27,6 +27,7 @@ class CppAnnotation:
     state_function: str
     thresholds: List[int]
     decisions: List[int]
+    decision_values: List[int] = field(default_factory=list)
     thresholds_lower: List[int] = field(default_factory=list)
     thresholds_upper: List[int] = field(default_factory=list)
     line_number: int = 0
@@ -87,7 +88,7 @@ def generate_cpp_annotation_mlir(
         num_thresholds = len(thresholds)
         lowers = ann.thresholds_lower or [0] * num_thresholds
         uppers = ann.thresholds_upper or [100] * num_thresholds
-        decision_values = decisions
+        decision_values = ann.decision_values or decisions
 
         state_indices_str = ", ".join(str(i) for i in ann.state_indices)
         thresholds_str = ", ".join(str(v) for v in thresholds)
@@ -190,6 +191,7 @@ def _normalize_keys(data: dict, line_number: int) -> dict:
         "state_fn": "state_function",
         "thresh": "thresholds",
         "dec": "decisions",
+        "decision_vals": "decision_values",
         "thresholds_lower": "thresholds_lower",
         "thresholds_upper": "thresholds_upper",
     }
@@ -318,6 +320,12 @@ def _build_annotation(
             f"decisions length must be thresholds + 1 for {func_name} at line {line_number}"
         )
 
+    decision_values = data.get("decision_values", [])
+    if decision_values and len(decision_values) < len(decisions):
+        raise AnnotationSyntaxError(
+            f"decision_values length must be >= decisions for {func_name} at line {line_number}"
+        )
+
     state_function = data.get("state_function")
     if not state_function or state_function == "identity":
         state_function = f"__identity_{func_name}"
@@ -340,6 +348,7 @@ def _build_annotation(
         state_function=state_function,
         thresholds=thresholds,
         decisions=decisions,
+        decision_values=decision_values,
         thresholds_lower=thresholds_lower,
         thresholds_upper=thresholds_upper,
         line_number=line_number,

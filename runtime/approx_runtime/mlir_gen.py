@@ -92,7 +92,10 @@ def generate_annotations(func_name: str, config: dict) -> str:
         decisions_str = ', '.join(str(d) for d in dt.decisions)
         thresholds_lower_str = ', '.join(str(t) for t in dt.thresholds_lower)
         thresholds_upper_str = ', '.join(str(t) for t in dt.thresholds_upper)
-        decision_values_str = ', '.join(str(d) for d in dt.decisions)
+        if dt.decision_values:
+            decision_values_str = ', '.join(str(d) for d in dt.decision_values)
+        else:
+            decision_values_str = ', '.join(str(d) for d in dt.decisions)
         
         ops.append(f'''  "approx.util.annotation.decision_tree"() <{{
     func_name = "{func_name}",
