@@ -164,20 +164,37 @@ def main():
         exec_bytes = _compile_exec(modified)
         elapsed_ms, vec = _run_exec(exec_bytes)
 
-        mse = np.mean((vec - exact_vec) ** 2)
-        accuracy = 1.0 / (1.0 + mse)
+        diff = vec - exact_vec
+        num = np.linalg.norm(diff.ravel())
+        denom = np.linalg.norm(exact_vec.ravel())
+        if denom == 0:
+            accuracy = 1.0 if num == 0 else 0.0
+        else:
+            accuracy = 1.0 - (num / denom)
         return elapsed_ms, accuracy
+
+    all_results = []
+
+    def result_callback(cfg, time_ms, accuracy):
+        all_results.append(
+            {"config": dict(cfg), "time_ms": time_ms, "accuracy": accuracy}
+        )
 
     result = ar.tune(
         mlir_source=annotated_mlir,
         evaluate_fn=evaluate_fn,
         accuracy_threshold=0.95,
         time_budget=20,
+        result_callback=result_callback,
     )
 
     print(f"Baseline time: {exact_time_ms:.2f}ms")
     print(f"Best config: {result['best_config']}")
     print(f"Best time: {result['best_time']:.2f}ms")
+    print(f"Total configs evaluated: {len(all_results)}")
+    print("All configs:")
+    for entry in all_results:
+        print(entry)
 
 
 if __name__ == "__main__":
