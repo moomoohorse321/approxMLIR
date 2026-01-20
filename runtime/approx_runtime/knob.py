@@ -32,6 +32,7 @@ class DecisionTree:
     # Optional metadata for autotuning
     thresholds_lower: List[int] = field(default_factory=lambda: [0])
     thresholds_upper: List[int] = field(default_factory=lambda: [100])
+    decision_values: List[int] = field(default_factory=list)
     
     def __post_init__(self):
         if len(self.decisions) != len(self.thresholds) + 1:
@@ -52,6 +53,8 @@ class DecisionTree:
                         f"func_substitute requires approx_kernels[{knob_val}] "
                         f"for decision value {knob_val}"
                     )
+        if self.decision_values and len(self.decision_values) < len(self.decisions):
+            raise ValueError("decision_values length must be >= decisions length")
 
 
 @dataclass
