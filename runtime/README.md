@@ -1,49 +1,71 @@
 # approx-runtime
 
-Minimal Python interface for the ApproxMLIR compiler toolchain.
+Python interface for the ApproxMLIR compiler toolchain.
 
 ## Installation
+
+From `approxMLIR/runtime`:
 
 ```bash
 pip install -e .                    # Basic
 pip install -e ".[jax]"             # With JAX export
 pip install -e ".[iree]"            # With IREE deployment
-pip install -e ".[tuner]"           # With OpenTuner auto-tuning
+pip install -e ".[tuning]"          # With OpenTuner auto-tuning
 pip install -e ".[all]"             # Everything
 ```
 
-## Usage
+## Quick Start (JAX)
+
+```python
+import approx_runtime as ar
+import jax.numpy as jnp
+
+def get_state(n):
+    return n
+
+# Original function stays untouched
+def my_kernel(n, data):
+    return jnp.sum(data[:n])
+
+config = {
+    "decision_tree": ar.DecisionTree(
+        state_function=get_state,
+        state_indices=[0],
+        thresholds=[100],
+        decisions=[0, 2],
+        transform_type="loop_perforate",
+    )
+}
+
+example_args = (100, jnp.zeros(1000))
+mlir = ar.export_with_config(my_kernel, example_args, config)
+mlir = ar.compile(mlir, workload=ar.WorkloadType.ML)
+vmfb = ar.compile_to_iree(mlir, backend="cuda")
+modules, device = ar.load_module(vmfb, backend="cuda")
+result = modules.module["my_kernel"](n, data)
+```
+
+## Quick Start (C++)
 
 ```python
 import approx_runtime as ar
 
-# 1. Define approximation with decorator
-def get_state(n):
-    return n
+cpp_source = open("approx_lavaMD.c").read()
+annotated_mlir = ar.compile_cpp_source(cpp_source, emit="annotated")
+transformed_mlir = ar.compile_cpp_source(cpp_source, emit="transformed")
+```
 
-@ar.Knob(decision_tree=ar.DecisionTree(
-    state_function=get_state,
-    state_indices=[0],
-    thresholds=[100],
-    decisions=[0, 2],
-    transform_type="loop_perforate"
-))
-def my_kernel(n, data):
-    return jnp.sum(data[:n])
+Use `CgeistConfig` when you need include dirs or a resource dir:
 
-# 2. Export to MLIR
-mlir = ar.export_to_mlir(my_kernel, 100, jnp.zeros(1000))
+```python
+import approx_runtime as ar
 
-# 3. Inject annotations
-mlir = ar.inject_annotations(mlir, "my_kernel", ar.get_config(my_kernel))
-
-# 4. Compile with approx-opt
-mlir = ar.compile(mlir)
-
-# 5. Deploy with IREE
-vmfb = ar.compile_to_iree(mlir, backend="cuda")
-module = ar.load_module(vmfb, backend="cuda")
-result = module.my_kernel(n, data)
+config = ar.CgeistConfig(
+    cgeist_path="/path/to/cgeist",
+    resource_dir="/path/to/clang/resource",
+    include_dirs=["/path/to/includes"],
+)
+mlir = ar.compile_cpp_source(cpp_source, cgeist_config=config, emit="annotated")
 ```
 
 ## Toolchains
@@ -52,7 +74,8 @@ ApproxMLIR supports separate toolchains for ML (StableHLO/IREE) and C++ (Polygei
 
 Environment variables:
 - `APPROX_OPT_ML` (default: `approx-opt`)
-- `APPROX_OPT_CPP` (default: `approx-opt-cpp`)
+- `APPROX_OPT_CPP` (default: `approx-opt-cpp`, set to `polygeist-opt` for Polygeist)
+- `CGEIST_PATH` (default: `cgeist`)
 
 Example:
 ```python
@@ -66,6 +89,13 @@ Apply configurations at call-time without decorators:
 
 ```python
 import approx_runtime as ar
+import jax.numpy as jnp
+
+def get_state(n):
+    return n
+
+def my_kernel(n, data):
+    return jnp.sum(data[:n])
 
 config = {
     "decision_tree": ar.DecisionTree(
@@ -77,7 +107,17 @@ config = {
     )
 }
 
-mlir = ar.export_with_config(my_kernel, (x_shape,), config)
+example_args = (100, jnp.zeros(1000))
+mlir = ar.export_with_config(my_kernel, example_args, config)
+```
+
+Use `export_module_with_configs` to export helpers (state functions, approximate kernels):
+
+```python
+mlir = ar.export_module_with_configs({
+    "my_kernel": (my_kernel, example_args, config),
+    "get_state": (get_state, (100,), None),
+})
 ```
 
 ## C++ Comment-Driven Annotations
@@ -87,10 +127,13 @@ Add structured comments to C/C++ source and generate MLIR annotations:
 ```c
 // @approx:decision_tree {
 //   transform_type: func_substitute
-//   state_indices: [-1]
-//   state_function: getState
-//   thresholds: [5, 10]
-//   decisions: [0, 1, 2]
+//   state_indices: [-1]         // optional, default: last arg
+//   state_function: getState    // optional, default: identity helper
+//   thresholds: [5, 10]         // required
+//   thresholds_lower: [0, 0]    // optional (default: 0s)
+//   thresholds_upper: [100, 100]// optional (default: 100s)
+//   decisions: [0, 1, 2]        // required, len = thresholds + 1
+//   decision_values: [0, 1, 2]  // optional tuning bounds
 // }
 void my_kernel(float* data, int n, int state) { ... }
 ```
@@ -101,6 +144,8 @@ import approx_runtime as ar
 annotations = ar.parse_and_generate(cpp_source)
 annotated_mlir = ar.inject_annotations_text(base_mlir, annotations)
 ```
+
+If `state_function` is omitted (or `identity`), a helper `__identity_<func>` is emitted.
 
 ## Approximation Types
 
@@ -115,6 +160,7 @@ annotated_mlir = ar.inject_annotations_text(base_mlir, annotations)
     # Optional: bounds for auto-tuning
     thresholds_lower=[0, 100],
     thresholds_upper=[500, 1000],
+    decision_values=[0, 1, 2],
 ))
 ```
 
@@ -196,6 +242,13 @@ print(f"Best accuracy: {result['best_accuracy']:.4f}")
 
 # Use the tuned MLIR
 tuned_mlir = result['best_mlir']
+```
+
+### JAX and C++ Helpers
+
+```python
+result = ar.tune_jax(my_kernel, example_args, config, evaluate_fn)
+result = ar.tune_cpp(cpp_source, base_mlir, evaluate_fn)
 ```
 
 ### Tuning API Reference
@@ -313,27 +366,19 @@ Command-line options include:
 --output-mlir FILE       Save tuned MLIR
 ```
 
-### Example: Function Substitution with Tuning
+### Examples
 
-See `examples/example_with_tuning.py` for a complete example that:
-1. Defines exact and approximate kernel variants
-2. Exports to MLIR with decision tree annotations
-3. Runs auto-tuning to find optimal thresholds
-4. Compares original vs tuned performance
-
-```bash
-# Run with defaults
-python -m approx_runtime.examples.example_with_tuning
-
-# Customize
-python -m approx_runtime.examples.example_with_tuning \
-    --tuning-time 600 \
-    --accuracy 0.95 \
-    --backend cuda
-```
+- `examples/example_w_tuning.py` (JAX tuning)
+- `examples/example_lavamd_tuning.py` (C++ tuning via cgeist)
 
 ## Pass Pipeline
 
+ML:
+```
+emit-approx → emit-management → config-approx → transform-approx → finalize-approx → legalize-to-stablehlo
+```
+
+CPP:
 ```
 emit-approx → emit-management → config-approx → transform-approx → finalize-approx
 ```
@@ -342,7 +387,10 @@ emit-approx → emit-management → config-approx → transform-approx → final
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `APPROX_OPT_PATH` | `~/iree-build/approxMLIR/build/bin/approx-opt` | Path to approx-opt binary |
+| `APPROX_OPT_PATH` | (deprecated) | Legacy approx-opt path (ML) |
+| `APPROX_OPT_ML` | `approx-opt` | Path to ML toolchain |
+| `APPROX_OPT_CPP` | `approx-opt-cpp` | Path to C++ toolchain (use `polygeist-opt`) |
+| `CGEIST_PATH` | `cgeist` | Path to cgeist |
 | `APPROX_BACKEND` | `cuda` | IREE backend (`cuda` or `llvm-cpu`) |
 | `TUNING_TIME_BUDGET` | `300` | Default tuning time in seconds |
 | `ACCURACY_THRESHOLD` | `0.9` | Default accuracy threshold |
