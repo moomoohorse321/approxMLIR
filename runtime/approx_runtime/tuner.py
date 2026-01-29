@@ -67,6 +67,7 @@ _opentuner_imported = False
 _MeasurementInterface = None
 _ConfigurationManipulator = None
 _IntegerParameter = None
+_LogIntegerParameter = None
 _FixedInputManager = None
 _ThresholdAccuracyMinimizeTime = None
 _Result = None
@@ -75,7 +76,7 @@ _Result = None
 def _import_opentuner():
     """Lazy import of OpenTuner modules."""
     global _opentuner_imported
-    global _MeasurementInterface, _ConfigurationManipulator, _IntegerParameter
+    global _MeasurementInterface, _ConfigurationManipulator, _IntegerParameter, _LogIntegerParameter
     global _FixedInputManager, _ThresholdAccuracyMinimizeTime, _Result
     
     if _opentuner_imported:
@@ -83,7 +84,12 @@ def _import_opentuner():
     
     try:
         import opentuner
-        from opentuner import MeasurementInterface, ConfigurationManipulator, IntegerParameter
+        from opentuner import (
+            MeasurementInterface,
+            ConfigurationManipulator,
+            IntegerParameter,
+            LogIntegerParameter,
+        )
         from opentuner.measurement.inputmanager import FixedInputManager
         from opentuner.search.objective import ThresholdAccuracyMinimizeTime
         import opentuner.resultsdb.models as models
@@ -91,6 +97,7 @@ def _import_opentuner():
         _MeasurementInterface = MeasurementInterface
         _ConfigurationManipulator = ConfigurationManipulator
         _IntegerParameter = IntegerParameter
+        _LogIntegerParameter = LogIntegerParameter
         _FixedInputManager = FixedInputManager
         _ThresholdAccuracyMinimizeTime = ThresholdAccuracyMinimizeTime
         _Result = models.Result
@@ -225,8 +232,16 @@ class ApproxTunerInterface:
                 """Build search space from parsed MLIR annotations."""
                 manipulator = _ConfigurationManipulator()
                 for name, param in outer_self.tunable_params.items():
+                    ParamType = _LogIntegerParameter if param.upper > 64 else _IntegerParameter
+                    log.debug(
+                        "Tuner param %s: [%d, %d] -> %s",
+                        name,
+                        param.lower,
+                        param.upper,
+                        "LogIntegerParameter" if ParamType is _LogIntegerParameter else "IntegerParameter",
+                    )
                     manipulator.add_parameter(
-                        _IntegerParameter(name, param.lower, param.upper)
+                        ParamType(name, param.lower, param.upper)
                     )
                 return manipulator
             
