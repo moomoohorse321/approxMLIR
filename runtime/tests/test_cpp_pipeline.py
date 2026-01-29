@@ -9,9 +9,10 @@ from approx_runtime.toolchain import ToolchainConfig
 def test_compile_cpp_source_calls_cgeist_and_approx_opt():
     cpp_source = """
 // @approx:decision_tree {
-//   transform_type: loop_perforate
+//   transform_type: func_substitute
 //   thresholds: [1]
 //   decisions: [0, 1]
+//   decision_values: [0, 1]
 // }
 int f(int x, int state) { return x; }
 """
@@ -50,5 +51,6 @@ int f(int x, int state) { return x; }
     approx_cmd = mock_run.call_args_list[1][0][0]
     assert cgeist_cmd[0] == "cgeist"
     assert approx_cmd[0] == "approx-opt-cpp"
+    assert "--pre-emit-transform" in approx_cmd
     assert "--emit-approx" in approx_cmd
     assert "--finalize-approx" in approx_cmd

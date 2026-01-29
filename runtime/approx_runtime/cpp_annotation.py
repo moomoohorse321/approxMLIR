@@ -33,9 +33,6 @@ class CppAnnotation:
     line_number: int = 0
 
 
-_TRANSFORM_TYPES = {"loop_perforate", "func_substitute", "task_skipping"}
-
-
 def parse_cpp_annotations(source: str) -> List[CppAnnotation]:
     """Parse all @approx annotations from C/C++ source text."""
     lines = source.splitlines()
@@ -297,10 +294,6 @@ def _build_annotation(
     data: dict, func_name: str, arg_count: int, line_number: int
 ) -> CppAnnotation:
     transform_type = data["transform_type"]
-    if transform_type not in _TRANSFORM_TYPES:
-        raise AnnotationSyntaxError(
-            f"Invalid transform_type '{transform_type}' at line {line_number}"
-        )
 
     state_indices = data.get("state_indices", [-1])
     if not isinstance(state_indices, list):

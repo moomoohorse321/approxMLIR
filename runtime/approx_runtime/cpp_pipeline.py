@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from .cpp_annotation import parse_and_generate
+from .cpp_annotation import parse_cpp_annotations, generate_cpp_annotation_mlir
 from .mlir_gen import inject_annotations_text
 from .toolchain import WorkloadType, ToolchainConfig, get_toolchain
 
@@ -78,12 +78,16 @@ def compile_cpp_source(
             )
 
         base_mlir = cgeist_result.stdout
-        annotations = parse_and_generate(cpp_source)
-        annotated = inject_annotations_text(base_mlir, annotations)
+        parsed_annotations = parse_cpp_annotations(cpp_source)
+        annotations_text = generate_cpp_annotation_mlir(parsed_annotations)
+        annotated = inject_annotations_text(base_mlir, annotations_text)
         if emit == "annotated":
             return annotated
 
         cpp_passes = toolchain.get_pipeline(WorkloadType.CPP)
+        if any(a.transform_type == "func_substitute" for a in parsed_annotations):
+            if not cpp_passes or cpp_passes[0] != "pre-emit-transform":
+                cpp_passes = ["pre-emit-transform"] + list(cpp_passes)
         approx_opt_path = toolchain.get_opt_path(WorkloadType.CPP)
 
         with tempfile.NamedTemporaryFile(

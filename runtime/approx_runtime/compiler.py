@@ -63,6 +63,16 @@ def _resolve_toolchain(
     return opt_path, pipeline
 
 
+def _needs_pre_emit_transform_from_mlir(mlir_text: str) -> bool:
+    # Heuristic: `convert_to_call` is emitted for func_substitute and is the most
+    # reliable indicator that `pre-emit-transform` must run before `emit-approx`.
+    if '"approx.util.annotation.convert_to_call"' in mlir_text:
+        return True
+    if 'transform_type = "func_substitute"' in mlir_text:
+        return True
+    return False
+
+
 def compile(
     mlir_text: str,
     passes: Optional[List[str]] = None,
@@ -85,9 +95,13 @@ def compile(
     Raises:
         CompilationError: If approx-opt fails
     """
+    user_passes = passes
     opt_path, passes = _resolve_toolchain(
         passes, approx_opt_path, workload, toolchain
     )
+    if user_passes is None and _needs_pre_emit_transform_from_mlir(mlir_text):
+        if not passes or passes[0] != "pre-emit-transform":
+            passes = ["pre-emit-transform"] + list(passes)
     
     with tempfile.NamedTemporaryFile(
         suffix='.mlir', mode='w', delete=False
@@ -133,9 +147,17 @@ def compile_file(
     Raises:
         CompilationError: If approx-opt fails
     """
+    user_passes = passes
     opt_path, passes = _resolve_toolchain(
         passes, approx_opt_path, workload, toolchain
     )
+    if user_passes is None and passes and passes[0] != "pre-emit-transform":
+        try:
+            mlir_text = Path(input_path).read_text(encoding="utf-8")
+        except OSError:
+            mlir_text = ""
+        if mlir_text and _needs_pre_emit_transform_from_mlir(mlir_text):
+            passes = ["pre-emit-transform"] + list(passes)
     
     cmd = [opt_path, input_path] + [f'--{p}' for p in passes]
     if output_path:
