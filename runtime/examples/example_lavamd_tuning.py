@@ -35,38 +35,6 @@ def main():
 
     cpp_source = cpp_path.read_text(encoding="utf-8")
 
-    self_box_comment = """
-// @approx:decision_tree {
-//   transform_type: loop_perforate
-//   thresholds: [60]
-//   thresholds_lower: [0]
-//   thresholds_upper: [100]
-//   decisions: [1, 2]
-//   decision_values: [1, 2, 3, 4]
-// }
-"""
-    neighbor_box_comment = """
-// @approx:decision_tree {
-//   transform_type: loop_perforate
-//   thresholds: [6]
-//   thresholds_lower: [0]
-//   thresholds_upper: [26]
-//   decisions: [1, 2]
-//   decision_values: [1, 2, 3, 4]
-// }
-"""
-
-    cpp_source = cpp_source.replace(
-        "static void self_box_accumulate",
-        self_box_comment + "static void self_box_accumulate",
-        1,
-    )
-    cpp_source = cpp_source.replace(
-        "void neighbor_box_accumulate",
-        neighbor_box_comment + "void neighbor_box_accumulate",
-        1,
-    )
-
     repo_root = Path(__file__).resolve().parents[3]
     cgeist_config = ar.CgeistConfig(
         cgeist_path=os.environ.get("CGEIST_PATH", "cgeist"),
@@ -81,12 +49,15 @@ def main():
             )
         ],
     )
-
+    toolchain = ar.ToolchainConfig(
+        ml_opt_path=os.environ.get("APPROX_OPT_ML", "approx-opt"),
+        cpp_opt_path=os.environ.get("APPROX_OPT_CPP", "polygeist-opt"),
+    )
+    
     annotated_mlir = ar.compile_cpp_source(
-        cpp_source, emit="annotated", cgeist_config=cgeist_config
+        cpp_source, emit="annotated", cgeist_config=cgeist_config, toolchain=toolchain
     )
 
-    toolchain = ar.get_toolchain()
     manager = ar.MLIRConfigManager()
     params = manager.parse_annotations(annotated_mlir)
 

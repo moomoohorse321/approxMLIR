@@ -10,6 +10,7 @@ from approx_runtime import (
     FUNC_SUBSTITUTE_PIPELINE,
     CompilationError,
     get_pipeline_for_config,
+    WorkloadType,
     DecisionTree,
     StaticTransform,
 )
@@ -169,6 +170,20 @@ class TestCompile:
         
         call_args = mock_run.call_args[0][0]
         assert call_args[0] == "/custom/path/approx-opt"
+
+    @patch('subprocess.run')
+    def test_compile_auto_adds_pre_emit_for_convert_to_call(self, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="output",
+            stderr="",
+        )
+
+        mlir = 'module { "approx.util.annotation.convert_to_call"() <{func_name = "f"}> : () -> () }'
+        compile(mlir, workload=WorkloadType.CPP)
+
+        call_args = mock_run.call_args[0][0]
+        assert '--pre-emit-transform' in call_args
 
 
 class TestCompileFile:
