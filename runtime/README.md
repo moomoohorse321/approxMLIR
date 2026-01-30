@@ -369,7 +369,15 @@ Command-line options include:
 ### Examples
 
 - `examples/example_w_tuning.py` (JAX tuning)
-- `examples/example_lavamd_tuning.py` (C++ tuning via cgeist)
+- `examples/benchmark/example_lavamd_tuning.py` (C++ tuning via cgeist)
+- `examples/benchmark/example_bm25_tuning.py` (C++ tuning via cgeist)
+- `examples/benchmark/example_choose_tuning.py` (C++ tuning via cgeist)
+- `examples/benchmark/example_kmeans_tuning.py` (C++ tuning via cgeist)
+- `examples/benchmark/example_pagerank_tuning.py` (C++ tuning via cgeist)
+- `examples/benchmark/example_kb_tuning.py` (C++ tuning via cgeist)
+
+The C/C++ benchmark scripts read annotated sources from `examples/benchmark/src/` (copies of the
+unannotated inputs in `tools/cgeist/Test/approxMLIR/` with `@approx` comments added).
 
 ## Pass Pipeline
 

@@ -28,8 +28,10 @@ def parse_kernel_out(
     time_ms: float | None = None
     centroids: dict[int, list[float]] = {}
     time_pattern = re.compile(r"\bK-means completed in ([\d.]+)\s*ms\b")
-    centroid_pattern = re.compile(r"Centroid (\\d+): \\((.*?)\\)")
+    centroid_pattern = re.compile(r"Centroid\s+(\d+):\s*\((.*?)\)")
+    float_pattern = re.compile(r"[-+]?(?:\d*\.\d+|\d+)(?:[eE][-+]?\d+)?")
     for line in data_string.splitlines():
+        line = line.strip()
         time_match = time_pattern.search(line)
         if time_match:
             time_ms = float(time_match.group(1))
@@ -37,7 +39,7 @@ def parse_kernel_out(
         if centroid_match:
             cluster_index = int(centroid_match.group(1))
             coords_str = centroid_match.group(2)
-            coords = [float(c) for c in re.findall(r"[\d.-]+", coords_str)]
+            coords = [float(c) for c in float_pattern.findall(coords_str)]
             centroids[cluster_index] = coords
     return time_ms, centroids
 
@@ -94,18 +96,17 @@ def main() -> None:
     manager = ar.MLIRConfigManager()
     params = manager.parse_annotations(annotated_mlir)
 
-    argv = ["-n", "200", "-d", "2", "-k", "5", "-i", "5", "-s", "42"]
+    argv = ["-n", "10000000", "-k", "10"]
     gt_path = Path(os.environ.get("KMEANS_GT_PATH", str(Path(__file__).resolve().parent / "gt.txt")))
-    if not gt_path.exists():
-        exact_cfg = exact_decision_config(params)
-        exact_mlir = manager.apply_config(annotated_mlir, exact_cfg)
-        exact_exec = compile_mlir_to_native_exec(
-            exact_mlir, cgeist_config=cgeist_config, toolchain=toolchain, tag="kmeans"
-        )
-        exact_result = run_exec(exact_exec, argv)
-        if exact_result.returncode != 0:
-            raise RuntimeError(exact_result.stderr)
-        gt_path.write_text(exact_result.stdout, encoding="utf-8", errors="ignore")
+    exact_cfg = exact_decision_config(params)
+    exact_mlir = manager.apply_config(annotated_mlir, exact_cfg)
+    exact_exec = compile_mlir_to_native_exec(
+        exact_mlir, cgeist_config=cgeist_config, toolchain=toolchain, tag="kmeans"
+    )
+    exact_result = run_exec(exact_exec, argv)
+    if exact_result.returncode != 0:
+        raise RuntimeError(exact_result.stderr)
+    gt_path.write_text(exact_result.stdout, encoding="utf-8", errors="ignore")
     gt_centroids = get_gt(gt_path)
 
     def evaluate_fn(config: dict) -> tuple[float, float]:
@@ -117,6 +118,8 @@ def main() -> None:
         if result.returncode != 0:
             raise RuntimeError(result.stderr)
         time_ms, approx_centroids = parse_kernel_out(result.stdout)
+        if not approx_centroids:
+            raise RuntimeError("kmeans: failed to parse centroids from stdout")
         accuracy = compute_similarity(gt_centroids, approx_centroids)
         if time_ms is None:
             raise RuntimeError("kmeans: failed to parse computation time from stdout")

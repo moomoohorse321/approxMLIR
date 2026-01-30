@@ -161,6 +161,8 @@ def run_exec(
         encoding="utf-8",
         errors="replace",
     )
+    if os.environ.get("APPROX_BENCH_PRINT_STDOUT") == "1":
+        print(result.stdout)
     elapsed_ms = (time.perf_counter() - start) * 1000.0
     return ExecResult(
         elapsed_ms=elapsed_ms,

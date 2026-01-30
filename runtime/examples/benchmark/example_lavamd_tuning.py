@@ -71,6 +71,16 @@ def main():
     manager = ar.MLIRConfigManager()
     params = manager.parse_annotations(annotated_mlir)
 
+    def _parse_time_ms(data_string: str) -> float | None:
+        for line in data_string.splitlines():
+            s = line.strip()
+            m = re.compile(
+                r"^\s*Total execution time:\s*([+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\s*(?:ms)?\s*$"
+            ).match(s)
+            if m:
+                return float(m.group(1))
+        return None
+
     def _read_size_t(f):
         pos = f.tell()
         raw = f.read(8)
@@ -140,26 +150,28 @@ def main():
         return max(0.0, min(1.0, sim))
 
     gt_path = Path(os.environ.get("LAVAMD_GT_PATH", str(Path(__file__).resolve().parent / "gt.txt")))
-    if not gt_path.exists():
-        exact_cfg = exact_decision_config(params)
-        exact_mlir = manager.apply_config(annotated_mlir, exact_cfg)
-        exact_exec = compile_mlir_to_native_exec(
-            exact_mlir, cgeist_config=cgeist_config, toolchain=toolchain, tag="lavamd"
-        )
-        import subprocess as sp
-        exact_run = sp.run(
-            [str(exact_exec), "-boxes1d", "6"],
-            cwd=exact_exec.parent,
-            capture_output=True,
-            text=True,
-        )
-        if exact_run.returncode != 0:
-            raise RuntimeError(exact_run.stderr)
-        result_path = exact_exec.parent / "result.txt"
-        if not result_path.exists():
-            raise RuntimeError("lavaMD did not produce result.txt")
-        gt_path.write_bytes(result_path.read_bytes())
+    exact_cfg = exact_decision_config(params)
+    exact_mlir = manager.apply_config(annotated_mlir, exact_cfg)
+    exact_exec = compile_mlir_to_native_exec(
+        exact_mlir, cgeist_config=cgeist_config, toolchain=toolchain, tag="lavamd"
+    )
+    import subprocess as sp
+    exact_run = sp.run(
+        [str(exact_exec), "-boxes1d", "8"],
+        cwd=exact_exec.parent,
+        capture_output=True,
+        text=True,
+    )
+    if exact_run.returncode != 0:
+        raise RuntimeError(exact_run.stderr)
+    result_path = exact_exec.parent / "result.txt"
+    if not result_path.exists():
+        raise RuntimeError("lavaMD did not produce result.txt")
+    gt_path.write_bytes(result_path.read_bytes())
     gt_values = get_gt(gt_path)
+    exact_time_ms = _parse_time_ms(exact_run.stdout)
+    if exact_time_ms is None:
+        raise RuntimeError("lavamd: failed to parse Total execution time from stdout (gt run)")
 
     def _compile_exec(mlir_text: str) -> Path:
         return compile_mlir_to_native_exec(
@@ -169,20 +181,10 @@ def main():
             tag="lavamd",
         )
 
-    def _parse_time_ms(data_string: str) -> float | None:
-        for line in data_string.splitlines():
-            s = line.strip()
-            m = re.compile(
-                r"^\s*Total execution time:\s*([+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\s*(?:ms)?\s*$"
-            ).match(s)
-            if m:
-                return float(m.group(1))
-        return None
-
     def _run_exec(exec_path: Path) -> tuple[float, dict]:
         import subprocess as sp
         result = sp.run(
-            [str(exec_path), "-boxes1d", "6"],
+            [str(exec_path), "-boxes1d", "8"],
             cwd=exec_path.parent,
             capture_output=True,
             text=True,
@@ -205,13 +207,6 @@ def main():
         accuracy = compute_similarity(gt_values, values)
         return elapsed_ms, accuracy
 
-    all_results = []
-
-    def result_callback(cfg, time_ms, accuracy):
-        all_results.append(
-            {"config": dict(cfg), "time_ms": time_ms, "accuracy": accuracy}
-        )
-
     result = ar.tune(
         mlir_source=annotated_mlir,
         evaluate_fn=evaluate_fn,
@@ -223,10 +218,7 @@ def main():
     print(f"Baseline time: {exact_time_ms:.2f}ms")
     print(f"Best config: {result['best_config']}")
     print(f"Best time: {result['best_time']:.2f}ms")
-    print(f"Total configs evaluated: {len(all_results)}")
-    print("All configs:")
-    for entry in all_results:
-        print(entry)
+    print("Results logged to exec/lavamd/results.csv")
 
 
 if __name__ == "__main__":

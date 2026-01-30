@@ -22,16 +22,18 @@ from benchmark_common import (  # noqa: E402
 
 def parse_pr_data(data_string: str) -> tuple[float | None, dict[int, float]]:
     pr_values: dict[int, float] = {}
-    lines = data_string.strip().split("\\n")
+    lines = data_string.strip().split("\n")
     for i, line in enumerate(lines):
+        line = line.strip()
         if line.startswith("Time:"):
             lines = lines[i:]
             break
     execution_time = None
-    if lines and lines[0].startswith("Time:"):
-        time_line = lines[0]
+    if lines and lines[0].strip().startswith("Time:"):
+        time_line = lines[0].strip()
         execution_time = float(time_line.split(":")[1].split()[0])
     for line in lines:
+        line = line.strip()
         if line.startswith("pr("):
             parts = line.split("=")
             index_str = parts[0].strip()
@@ -106,18 +108,7 @@ def main() -> None:
     params = manager.parse_annotations(annotated_mlir)
 
     argv_base = [
-        "-m",
-        "synthetic",
-        "-t",
-        "1",
-        "-n",
-        "2000",
-        "-d",
-        "10",
-        "-i",
-        "10",
-        "-s",
-        "1",
+        "-p", "-n", "2000000"
     ]
     conf_min = int(os.environ.get("PAGERANK_CONF_MIN", "0"))
     conf_max = int(os.environ.get("PAGERANK_CONF_MAX", "5"))
@@ -129,25 +120,24 @@ def main() -> None:
 
     gt_dir = Path(os.environ.get("PAGERANK_GT_DIR", str(Path(__file__).resolve().parent)))
     gt_dir.mkdir(parents=True, exist_ok=True)
-    def get_or_create_gt() -> dict[int, float]:
+    def generate_gt() -> dict[int, float]:
         gt_path_env = os.environ.get("PAGERANK_GT_PATH")
         if gt_path_env:
             gt_path = Path(gt_path_env)
         else:
             gt_path = gt_dir / "gt_pagerank.txt"
-        if not gt_path.exists():
-            exact_cfg = exact_decision_config(params)
-            exact_mlir = manager.apply_config(annotated_mlir, exact_cfg)
-            exact_exec = compile_mlir_to_native_exec(
-                exact_mlir, cgeist_config=cgeist_config, toolchain=toolchain, tag="pagerank"
-            )
-            argv = argv_base + ["-e", str(conf_min)]
-            exact_result = run_exec(exact_exec, argv)
-            if exact_result.returncode != 0:
-                raise RuntimeError(exact_result.stderr)
-            gt_path.write_text(exact_result.stdout, encoding="utf-8", errors="ignore")
+        exact_cfg = exact_decision_config(params)
+        exact_mlir = manager.apply_config(annotated_mlir, exact_cfg)
+        exact_exec = compile_mlir_to_native_exec(
+            exact_mlir, cgeist_config=cgeist_config, toolchain=toolchain, tag="pagerank"
+        )
+        argv = argv_base + ["-e", str(conf_min)]
+        exact_result = run_exec(exact_exec, argv)
+        if exact_result.returncode != 0:
+            raise RuntimeError(exact_result.stderr)
+        gt_path.write_text(exact_result.stdout, encoding="utf-8", errors="ignore")
         return get_gt(gt_path)
-    gt_values = get_or_create_gt()
+    gt_values = generate_gt()
 
     def evaluate_fn(config: dict) -> tuple[float, float]:
         modified = manager.apply_config(annotated_mlir, config)

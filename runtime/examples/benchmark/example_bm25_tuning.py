@@ -102,24 +102,23 @@ def main() -> None:
         raise FileNotFoundError(f"bm25 docs not found: {docs_path}")
     gt_dir = Path(os.environ.get("BM25_GT_DIR", str(Path(__file__).resolve().parent)))
     gt_dir.mkdir(parents=True, exist_ok=True)
-    def get_or_create_gt() -> list[int]:
+    def generate_gt() -> list[int]:
         gt_path_env = os.environ.get("BM25_GT_PATH")
         if gt_path_env:
             gt_path = Path(gt_path_env)
         else:
             gt_path = gt_dir / "gt_bm25.txt"
-        if not gt_path.exists():
-            exact_cfg = exact_decision_config(params)
-            exact_mlir = manager.apply_config(annotated_mlir, exact_cfg)
-            exact_exec = compile_mlir_to_native_exec(
-                exact_mlir, cgeist_config=cgeist_config, toolchain=toolchain, tag="bm25"
-            )
-            exact_result = run_exec(exact_exec, [str(docs_path), query, str(conf_min)])
-            if exact_result.returncode != 0:
-                raise RuntimeError(exact_result.stderr)
-            gt_path.write_text(exact_result.stdout, encoding="utf-8", errors="ignore")
+        exact_cfg = exact_decision_config(params)
+        exact_mlir = manager.apply_config(annotated_mlir, exact_cfg)
+        exact_exec = compile_mlir_to_native_exec(
+            exact_mlir, cgeist_config=cgeist_config, toolchain=toolchain, tag="bm25"
+        )
+        exact_result = run_exec(exact_exec, [str(docs_path), query, str(conf_min)])
+        if exact_result.returncode != 0:
+            raise RuntimeError(exact_result.stderr)
+        gt_path.write_text(exact_result.stdout, encoding="utf-8", errors="ignore")
         return get_gt(gt_path)
-    gt_list = get_or_create_gt()
+    gt_list = generate_gt()
 
     def evaluate_fn(config: dict) -> tuple[float, float]:
         modified = manager.apply_config(annotated_mlir, config)
