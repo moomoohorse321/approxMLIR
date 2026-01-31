@@ -114,7 +114,7 @@ def TransformApproxPass : Pass<"transform-approx"> {
   let summary = "Apply transformOp approximations (loop perforation, etc.)";
   let constructor = "mlir::approx::createTransformApproxPass()";
   let dependentDialects = ["func::FuncDialect", "scf::SCFDialect",
-    "approx::approxDialect"];
+    "approx::approxDialect", "LLVM::LLVMDialect"];
 }
 
 def FinalizeApproxPass : Pass<"finalize-approx"> {
