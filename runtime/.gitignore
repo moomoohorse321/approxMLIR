@@ -1,0 +1,4 @@
+*.mlir
+*.txt
+*.db
+__pycache__/

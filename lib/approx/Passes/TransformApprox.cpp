@@ -21,6 +21,7 @@
  */
 #include "PassDetails.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
@@ -32,6 +33,7 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "stablehlo/dialect/StablehloOps.h"
 
 #include "approx/Passes/Passes.h"
 #include "approx/Passes/Utils.h"
@@ -263,7 +265,8 @@ private:
     // Pre-order walk ensures we visit operations before their nested regions
     // This gives us the first (outermost) branching operation
     region->walk<WalkOrder::PreOrder>([&](Operation* op) {
-      if (isa<scf::IfOp>(op) || isa<scf::IndexSwitchOp>(op)) {
+      if (isa<scf::IfOp>(op) || isa<scf::IndexSwitchOp>(op) ||
+          isa<stablehlo::CaseOp>(op)) {
         branchingOp = op;
         // Interrupt immediately when we find the first branching op
         return WalkResult::interrupt();
@@ -277,7 +280,7 @@ private:
   /**
    * Clear all operations in the region except the terminator
    */
-  void clearRegionPayload(PatternRewriter &rewriter, Region* region) const {
+  LogicalResult clearRegionPayload(PatternRewriter &rewriter, Region* region) const {
     Block& block = region->front();
     
     // Collect all non-terminator ops in reverse order
@@ -288,13 +291,47 @@ private:
       }
     }
     
-    // Replace all uses with undef values before erasing
+    // Replace all uses with undef/empty values before erasing
     for (Operation* op : opsToErase) {
       for (auto result : op->getResults()) {
         if (!result.use_empty()) {
           rewriter.setInsertionPoint(op);
-          Value undefValue = rewriter.create<LLVM::UndefOp>(op->getLoc(), result.getType());
-          result.replaceAllUsesWith(undefValue);
+          Location loc = op->getLoc();
+          Type type = result.getType();
+          Value replacement;
+          if (LLVM::isCompatibleType(type)) {
+            replacement = rewriter.create<LLVM::UndefOp>(loc, type);
+          } else if (auto tensorTy = dyn_cast<RankedTensorType>(type)) {
+            if (!tensorTy.hasStaticShape()) {
+              op->emitError("task_skipping: dynamic ranked tensor requires tensor dialect: ")
+                  << type;
+              return failure();
+            }
+            replacement = rewriter.create<arith::ConstantOp>(
+                loc, type, rewriter.getZeroAttr(type));
+          } else if (isa<IntegerType, FloatType, IndexType>(type)) {
+            replacement = rewriter.create<arith::ConstantOp>(
+                loc, type, rewriter.getZeroAttr(type));
+          } else if (auto vecTy = dyn_cast<VectorType>(type)) {
+            replacement = rewriter.create<arith::ConstantOp>(
+                loc, type, rewriter.getZeroAttr(type));
+          } else if (auto memrefTy = dyn_cast<MemRefType>(type)) {
+            SmallVector<Value> dynSizes;
+            for (int64_t i = 0, e = memrefTy.getRank(); i < e; ++i) {
+              if (memrefTy.isDynamicDim(i)) {
+                Value idx = rewriter.create<arith::ConstantIndexOp>(loc, i);
+                dynSizes.push_back(
+                    rewriter.create<memref::DimOp>(loc, result, idx));
+              }
+            }
+            replacement = rewriter.create<memref::AllocOp>(
+                loc, memrefTy, dynSizes);
+          } else {
+            op->emitError("task_skipping: unsupported type for replacement: ")
+                << type;
+            return failure();
+          }
+          result.replaceAllUsesWith(replacement);
         }
       }
     }
@@ -303,6 +340,7 @@ private:
     for (Operation* op : opsToErase) {
       rewriter.eraseOp(op);
     }
+    return success();
   }
 
   /**
@@ -334,6 +372,10 @@ private:
       // Add default region if it exists and is non-empty
       if (!switchOp.getDefaultRegion().empty()) {
         branches.push_back(&switchOp.getDefaultRegion());
+      }
+    } else if (auto caseOp = dyn_cast<stablehlo::CaseOp>(branchingOp)) {
+      for (auto &region : caseOp.getBranches()) {
+        branches.push_back(&region);
       }
     }
   }
@@ -372,6 +414,10 @@ private:
     SmallVector<Value> results;
     if (auto yieldOp = dyn_cast<scf::YieldOp>(terminator)) {
       for (Value v : yieldOp.getOperands()) {
+        results.push_back(mapping.lookupOrDefault(v));
+      }
+    } else if (auto returnOp = dyn_cast<stablehlo::ReturnOp>(terminator)) {
+      for (Value v : returnOp.getOperands()) {
         results.push_back(mapping.lookupOrDefault(v));
       }
     }
@@ -418,7 +464,8 @@ public:
     
     if (knobValue == 0) {
       // Skip entire payload - clear everything except terminator
-      clearRegionPayload(rewriter, parentRegion);
+      if (failed(clearRegionPayload(rewriter, parentRegion)))
+        return failure();
       return success();
     }
     
