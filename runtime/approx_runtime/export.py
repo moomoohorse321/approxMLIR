@@ -45,7 +45,8 @@ def export_to_mlir(func: Callable, *example_args: Any) -> str:
     jitted = jax.jit(func)
     
     # Export to StableHLO
-    exported = jax.export.export(jitted)(*example_args)
+    import jax.export as jax_export
+    exported = jax_export.export(jitted)(*example_args)
     
     # Get MLIR text
     return str(exported.mlir_module())
@@ -97,7 +98,8 @@ def export_module(
     for target_name, (func, example_args) in functions.items():
         # Export single function via JAX
         jitted = jax.jit(func)
-        exported = jax.export.export(jitted)(*example_args)
+        import jax.export as jax_export
+        exported = jax_export.export(jitted)(*example_args)
         mlir_text = str(exported.mlir_module())
         
         # Extract and rename the function
@@ -151,7 +153,7 @@ def _extract_and_rename_func(mlir_text: str, new_name: str) -> Optional[str]:
             if clean_line.strip():
                 # Preserve indentation but ensure minimum
                 stripped = clean_line.lstrip()
-                if stripped.startswith('}'):
+                if stripped == '}':
                     func_lines.append("  }")
                 else:
                     func_lines.append("    " + stripped)
