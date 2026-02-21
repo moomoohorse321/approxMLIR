@@ -34,7 +34,13 @@ class CppAnnotation:
 
 
 def parse_cpp_annotations(source: str) -> List[CppAnnotation]:
-    """Parse all @approx annotations from C/C++ source text."""
+    """Parse all @approx annotations from C/C++ source text.
+
+    Supports two annotation formats:
+      1. Comment-based: ``// @approx:decision_tree { ... }``
+      2. Pragma-based:  ``#pragma approx decision_tree key=val ...``
+         (with optional backslash line continuations)
+    """
     lines = source.splitlines()
     annotations: List[CppAnnotation] = []
     i = 0
@@ -52,6 +58,14 @@ def parse_cpp_annotations(source: str) -> List[CppAnnotation]:
             else:
                 data = _parse_single_line(raw, i + 1)
                 i += 1
+
+            func_name, arg_count = _find_next_function(lines, i)
+            ann = _build_annotation(data, func_name, arg_count, i + 1)
+            annotations.append(ann)
+        elif _is_pragma_approx(line):
+            raw, end_idx = _collect_pragma_line(lines, i)
+            data = _parse_single_line(raw, i + 1)
+            i = end_idx
 
             func_name, arg_count = _find_next_function(lines, i)
             ann = _build_annotation(data, func_name, arg_count, i + 1)
@@ -126,6 +140,34 @@ def parse_and_generate(source: str, module_name: Optional[str] = None) -> str:
     return generate_cpp_annotation_mlir(annotations, module_name)
 
 
+def _is_pragma_approx(line: str) -> bool:
+    stripped = line.strip()
+    return stripped.startswith("#pragma") and "approx" in stripped
+
+
+def _collect_pragma_line(lines: List[str], start: int) -> tuple[str, int]:
+    """Collect a #pragma approx line, joining backslash continuations."""
+    parts: List[str] = []
+    i = start
+    while i < len(lines):
+        line = lines[i].rstrip()
+        if i == start:
+            # Strip the "#pragma approx" prefix
+            idx = line.index("approx") + len("approx")
+            line = line[idx:].strip()
+            # Strip optional "decision_tree" keyword
+            if line.startswith("decision_tree"):
+                line = line[len("decision_tree"):].strip()
+        if line.endswith("\\"):
+            parts.append(line[:-1].strip())
+            i += 1
+        else:
+            parts.append(line.strip())
+            i += 1
+            break
+    return " ".join(parts), i
+
+
 def _collect_block(lines: List[str], start: int) -> tuple[list[str], int]:
     block_lines = []
     i = start
@@ -173,8 +215,12 @@ def _parse_single_line(raw: str, line_number: int) -> dict:
     tokens = raw.split()
     if not tokens:
         raise AnnotationSyntaxError(f"Empty @approx annotation at line {line_number}")
-    data = {"transform_type": tokens[0]}
-    for tok in tokens[1:]:
+    data = {}
+    start = 0
+    if "=" not in tokens[0]:
+        data["transform_type"] = tokens[0]
+        start = 1
+    for tok in tokens[start:]:
         if "=" not in tok:
             continue
         key, value = tok.split("=", 1)

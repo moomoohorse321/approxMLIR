@@ -110,7 +110,7 @@ def main() -> None:
     argv_base = [
         "-p", "-n", "2000000"
     ]
-    conf_min = int(os.environ.get("PAGERANK_CONF_MIN", "0"))
+    conf_min = int(os.environ.get("PAGERANK_CONF_MIN", "1"))
     conf_max = int(os.environ.get("PAGERANK_CONF_MAX", "5"))
     conf_runs = int(os.environ.get("PAGERANK_CONF_RUNS", "3"))
     conf_seed = os.environ.get("PAGERANK_CONF_SEED")
