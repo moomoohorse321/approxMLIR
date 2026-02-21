@@ -121,7 +121,7 @@ int pair_interaction(int pi, int pj, fp a2,
 //   thresholds: [60]
 //   thresholds_lower: [1]
 //   thresholds_upper: [100]
-//   decisions: [1, 2]
+//   decisions: [0, 0]
 //   decision_values: [1, 2, 3, 4]
 // }
 static void self_box_accumulate(int pi_idx, int first_i, fp a2,
@@ -149,7 +149,7 @@ static void self_box_accumulate(int pi_idx, int first_i, fp a2,
 //   thresholds: [6]
 //   thresholds_lower: [1]
 //   thresholds_upper: [10]
-//   decisions: [1, 2]
+//   decisions: [0, 0]
 //   decision_values: [0, 1, 2, 3]
 // }
 void neighbor_box_accumulate(int pi_idx, int bx, fp a2,

@@ -53,7 +53,7 @@ int compare_tokens(const char *t1, const char *t2) {
 //   thresholds: [4]
 //   thresholds_lower: [1]
 //   thresholds_upper: [1000]
-//   decisions: [0, 1]
+//   decisions: [0, 0]
 //   decision_values: [0, 1]
 // }
 int count_and_lower_words(char *str, int len, int state) {
@@ -212,7 +212,7 @@ int calculate_df(const char *term, char **corpus, int num_docs) {
 //   thresholds: [2000]
 //   thresholds_lower: [1]
 //   thresholds_upper: [40]
-//   decisions: [0, 1]
+//   decisions: [0, 0]
 //   decision_values: [0, 1, 2]
 // }
 void score_term_over_docs(
@@ -291,7 +291,7 @@ void approx_score_term_over_docs_2(
 //   thresholds: [6]
 //   thresholds_lower: [1]
 //   thresholds_upper: [5]
-//   decisions: [0, 1]
+//   decisions: [0, 0]
 //   decision_values: [0, 1, 2, 3]
 // }
 int lowering_corpus(char** corpus, char** lower_corpus, int* _num_docs, double *doc_lengths, DocumentScore *scores, int state) {
@@ -493,7 +493,7 @@ int main(int argc, char **argv)
    if (ranked_scores)
    {
        printf("Ranking results:\n");
-       for (int i = 0; i < printed_doc; ++i)
+       for (int i = 0; i < 1000; ++i)
        {
            int doc_index = ranked_scores[i].doc_index;
            printf("Rank %d: Doc %d (Score: %.4f) - \"%s\"\n",

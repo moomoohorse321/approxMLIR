@@ -29,7 +29,7 @@ int approx_state_identity(int state) { return state; }
 //   thresholds: [1]
 //   thresholds_lower: [1]
 //   thresholds_upper: [10]
-//   decisions: [0, 1]
+//   decisions: [0, 0]
 //   decision_values: [0, 1, 2]
 // }
 int parse_embedding(const char *embedding_str, float *embedding, int state) {
@@ -195,7 +195,7 @@ void approx_compute_similarities_with_state_2(int cos_state) {
 //   thresholds: [2]
 //   thresholds_lower: [1]
 //   thresholds_upper: [5]
-//   decisions: [0, 1]
+//   decisions: [0, 0]
 //   decision_values: [0, 1, 2]
 // }
 void compute_similarities_with_state(int cos_state) {

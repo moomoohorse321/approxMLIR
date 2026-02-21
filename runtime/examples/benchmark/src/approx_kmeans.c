@@ -44,7 +44,7 @@ double compute_distance_sq(const double *point1, const double *point2, int dim, 
 //   thresholds: [8]
 //   thresholds_lower: [1]
 //   thresholds_upper: [20]
-//   decisions: [1, 2]
+//   decisions: [0, 0]
 //   decision_values: [0, 1, 2, 3, 4]
 // }
 int choose_cluster(const double *point, double **centroids, int k, int dim,
@@ -76,7 +76,7 @@ void reset_accumulators(double **new_centroids, int *cluster_sizes, int k, int d
 //   thresholds: [10000]
 //   thresholds_lower: [1]
 //   thresholds_upper: [20]
-//   decisions: [1, 2]
+//   decisions: [0, 0]
 //   decision_values: [0, 1, 2, 3, 4]
 // }
 void assign_points_and_accumulate(double **points, double **centroids, int *assignments,
@@ -114,7 +114,7 @@ void recompute_centroids(double **centroids, double **new_centroids,
 //   thresholds: [10000]
 //   thresholds_lower: [1]
 //   thresholds_upper: [1000000]
-//   decisions: [1, 2]
+//   decisions: [0, 0]
 //   decision_values: [0, 1, 2, 3, 4]
 // }
 void run_kmeans_iterations(int max_iters, int k, int dim, int num_points,

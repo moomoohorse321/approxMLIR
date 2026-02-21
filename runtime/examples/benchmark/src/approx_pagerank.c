@@ -264,7 +264,7 @@ double approx_update_node_rank_2(const GraphCSR *G,
 //   thresholds: [24]
 //   thresholds_lower: [1]
 //   thresholds_upper: [50]
-//   decisions: [0, 1]
+//   decisions: [0, 0]
 //   decision_values: [0, 1, 2]
 // }
 double update_node_rank(const GraphCSR *G,
@@ -372,7 +372,7 @@ void *approx_pagerank_worker_impl_2(void *argp, int state) {
 //   thresholds: [3]
 //   thresholds_lower: [1]
 //   thresholds_upper: [5]
-//   decisions: [0, 1]
+//   decisions: [0, 0]
 //   decision_values: [0, 1, 2]
 // }
 void *pagerank_worker_impl(void *argp, int state) {
