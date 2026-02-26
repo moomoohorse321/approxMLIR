@@ -7,6 +7,7 @@ from pathlib import Path
 import warnings
 
 from .toolchain import WorkloadType, ToolchainConfig, get_toolchain
+from .triton_compiler import compile_with_triton_plugin, TritonCompilationError
 
 __all__ = [
     'compile', 
@@ -14,6 +15,7 @@ __all__ = [
     'PASS_PIPELINE',
     'FUNC_SUBSTITUTE_PIPELINE', 
     'CompilationError',
+    'TritonCompilationError',
     'get_pipeline_for_config',
     'WorkloadType',
     'ToolchainConfig',
@@ -27,14 +29,17 @@ PASS_PIPELINE = ToolchainConfig().ml_pipeline
 FUNC_SUBSTITUTE_PIPELINE = ["pre-emit-transform"] + PASS_PIPELINE
 
 
-def get_pipeline_for_config(config: dict) -> List[str]:
+def get_pipeline_for_config(
+    config: dict,
+    workload: WorkloadType = WorkloadType.ML,
+) -> List[str]:
     """Select appropriate pass pipeline based on configuration.
     
     Returns FUNC_SUBSTITUTE_PIPELINE if func_substitute transform is used,
     otherwise returns standard PASS_PIPELINE.
     """
     toolchain = get_toolchain()
-    return toolchain.get_pipeline(WorkloadType.ML, config)
+    return toolchain.get_pipeline(workload, config)
 
 
 class CompilationError(Exception):
@@ -96,6 +101,24 @@ def compile(
         CompilationError: If approx-opt fails
     """
     user_passes = passes
+    if workload == WorkloadType.TRITON:
+        if approx_opt_path is not None:
+            warnings.warn(
+                "approx_opt_path is ignored for TRITON workload.",
+                UserWarning,
+                stacklevel=2,
+            )
+        toolchain = toolchain or get_toolchain()
+        pipeline = list(passes or toolchain.get_pipeline(workload))
+        if user_passes is None and _needs_pre_emit_transform_from_mlir(mlir_text):
+            if not pipeline or pipeline[0] != "pre-emit-transform":
+                pipeline = ["pre-emit-transform"] + pipeline
+        return compile_with_triton_plugin(
+            mlir_text,
+            passes=pipeline,
+            plugin_path=toolchain.triton_plugin_path or None,
+        )
+
     opt_path, passes = _resolve_toolchain(
         passes, approx_opt_path, workload, toolchain
     )
@@ -148,6 +171,24 @@ def compile_file(
         CompilationError: If approx-opt fails
     """
     user_passes = passes
+    if workload == WorkloadType.TRITON:
+        mlir_text = Path(input_path).read_text(encoding="utf-8")
+        pipeline = list(passes or (toolchain or get_toolchain()).get_pipeline(workload))
+        if user_passes is None and pipeline and pipeline[0] != "pre-emit-transform":
+            if _needs_pre_emit_transform_from_mlir(mlir_text):
+                pipeline = ["pre-emit-transform"] + pipeline
+        transformed = compile(
+            mlir_text,
+            passes=pipeline,
+            approx_opt_path=approx_opt_path,
+            workload=workload,
+            toolchain=toolchain,
+        )
+        if output_path:
+            Path(output_path).write_text(transformed, encoding="utf-8")
+            return output_path
+        return transformed
+
     opt_path, passes = _resolve_toolchain(
         passes, approx_opt_path, workload, toolchain
     )

@@ -23,6 +23,8 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/SymbolTable.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -111,12 +113,31 @@ static void eraseRegion(Region *region, PatternRewriter &rewriter) {
   }
 }
 
+static Operation *lookupFunctionLikeByName(ModuleOp moduleOp, StringRef funcName) {
+  for (Operation &op : moduleOp.getBody()->getOperations()) {
+    if (!isa<FunctionOpInterface>(op))
+      continue;
+    auto symName =
+        op.getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
+    if (symName && symName.getValue() == funcName)
+      return &op;
+  }
+  return nullptr;
+}
+
 /// Helper to wrap a function body in a knobOp
 /// Returns the created knobOp, or nullptr on failure
-static approx::knobOp wrapFunctionInKnob(func::FuncOp funcOp, 
-                                          PatternRewriter &rewriter) {
+static approx::knobOp wrapFunctionInKnob(Operation *funcOp,
+                                         PatternRewriter &rewriter) {
+  auto functionOp = dyn_cast<FunctionOpInterface>(funcOp);
+  if (!functionOp)
+    return nullptr;
+  auto functionType = dyn_cast<FunctionType>(functionOp.getFunctionType());
+  if (!functionType)
+    return nullptr;
+
   // Clone the original function body to move into knob
-  Region &funcBody = funcOp.getBody();
+  Region &funcBody = funcOp->getRegion(0);
   Region clonedRegion;
   rewriter.cloneRegionBefore(funcBody, clonedRegion, clonedRegion.end());
 
@@ -124,10 +145,9 @@ static approx::knobOp wrapFunctionInKnob(func::FuncOp funcOp,
   eraseRegion(&funcBody, rewriter);
   
   // Create a new entry block for the function
-  SmallVector<Location> argLocs(funcOp.getFunctionType().getNumInputs(), 
-                                 funcOp.getLoc());
+  SmallVector<Location> argLocs(functionType.getNumInputs(), funcOp->getLoc());
   Block *newFuncBlock = rewriter.createBlock(&funcBody, funcBody.end(),
-                                              funcOp.getFunctionType().getInputs(), 
+                                              functionType.getInputs(),
                                               argLocs);
   
   // Set insertion point inside the new block
@@ -142,8 +162,8 @@ static approx::knobOp wrapFunctionInKnob(func::FuncOp funcOp,
   // Create the KnobOp with the function's return types
   // Note: knobOp no longer has state or transform_type - just args and metadata
   auto knobOp = rewriter.create<approx::knobOp>(
-    funcOp.getLoc(), 
-    funcOp.getFunctionType().getResults(),
+    funcOp->getLoc(),
+    functionType.getResults(),
     knobArgs,
     /*id=*/0,
     /*rf=*/0,
@@ -165,11 +185,11 @@ static approx::knobOp wrapFunctionInKnob(func::FuncOp funcOp,
   // Replace return with yield in the knob region
   for (Block &knobBlock : knobRegion) {
     for (auto &op : llvm::make_early_inc_range(knobBlock)) {
-      if (auto returnOp = dyn_cast<func::ReturnOp>(op)) {
+      if (op.hasTrait<OpTrait::ReturnLike>()) {
         rewriter.setInsertionPoint(&op);
         rewriter.create<approx::yieldOp>(
-            returnOp.getLoc(), returnOp.getOperands());
-        rewriter.eraseOp(returnOp);
+            op.getLoc(), op.getOperands());
+        rewriter.eraseOp(&op);
       }
     }
   }
@@ -177,10 +197,21 @@ static approx::knobOp wrapFunctionInKnob(func::FuncOp funcOp,
   rewriter.setInsertionPointToEnd(newFuncBlock);
 
   // Create the return with knob results
-  if (funcOp.getFunctionType().getNumResults() > 0) {
-    rewriter.create<func::ReturnOp>(funcOp.getLoc(), knobOp.getResults());
+  if (functionType.getNumResults() > 0) {
+    if (funcOp->getName().getStringRef() == "tt.func") {
+      OperationState retState(funcOp->getLoc(), "tt.return");
+      retState.addOperands(knobOp.getResults());
+      rewriter.create(retState);
+    } else {
+      rewriter.create<func::ReturnOp>(funcOp->getLoc(), knobOp.getResults());
+    }
   } else {
-    rewriter.create<func::ReturnOp>(funcOp.getLoc());
+    if (funcOp->getName().getStringRef() == "tt.func") {
+      OperationState retState(funcOp->getLoc(), "tt.return");
+      rewriter.create(retState);
+    } else {
+      rewriter.create<func::ReturnOp>(funcOp->getLoc());
+    }
   }
 
   // Hoist affine symbols out of the knob
@@ -207,7 +238,7 @@ struct EmitKnobFromDecisionTreeAnnotation
                   PatternRewriter &rewriter) const final {
     ModuleOp moduleOp = annotationOp->getParentOfType<mlir::ModuleOp>();
     StringRef funcName = annotationOp.getFuncName();
-    auto funcOp = moduleOp.lookupSymbol<func::FuncOp>(funcName);
+    auto *funcOp = lookupFunctionLikeByName(moduleOp, funcName);
     if (!funcOp) {
       return annotationOp.emitOpError("Function with name '")
              << funcName << "' not found.";
@@ -215,7 +246,7 @@ struct EmitKnobFromDecisionTreeAnnotation
     
     // Check if function already has a knobOp (avoid double-wrapping)
     bool hasKnob = false;
-    funcOp.walk([&](approx::knobOp op) {
+    funcOp->walk([&](approx::knobOp op) {
       hasKnob = true;
       return WalkResult::interrupt();
     });
@@ -226,7 +257,7 @@ struct EmitKnobFromDecisionTreeAnnotation
     }
     
     // Wrap function body in knobOp
-    rewriter.setInsertionPointToStart(&funcOp.getBody().front());
+    rewriter.setInsertionPointToStart(&funcOp->getRegion(0).front());
     auto knobOp = wrapFunctionInKnob(funcOp, rewriter);
     if (!knobOp) {
       return failure();
@@ -249,7 +280,7 @@ struct EmitKnobFromKnobAnnotation
                   PatternRewriter &rewriter) const final {
     ModuleOp moduleOp = annotationOp->getParentOfType<mlir::ModuleOp>();
     StringRef funcName = annotationOp.getFuncName();
-    auto funcOp = moduleOp.lookupSymbol<func::FuncOp>(funcName);
+    auto *funcOp = lookupFunctionLikeByName(moduleOp, funcName);
     if (!funcOp) {
       return annotationOp.emitOpError("Function with name '")
              << funcName << "' not found.";
@@ -257,7 +288,7 @@ struct EmitKnobFromKnobAnnotation
     
     // Check if function already has a knobOp
     bool hasKnob = false;
-    funcOp.walk([&](approx::knobOp op) {
+    funcOp->walk([&](approx::knobOp op) {
       hasKnob = true;
       return WalkResult::interrupt();
     });
@@ -269,7 +300,7 @@ struct EmitKnobFromKnobAnnotation
     }
     
     // Wrap function body in knobOp
-    rewriter.setInsertionPointToStart(&funcOp.getBody().front());
+    rewriter.setInsertionPointToStart(&funcOp->getRegion(0).front());
     auto knobOp = wrapFunctionInKnob(funcOp, rewriter);
     if (!knobOp) {
       return failure();

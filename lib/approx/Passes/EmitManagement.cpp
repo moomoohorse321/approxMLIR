@@ -22,6 +22,8 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/SymbolTable.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "approx/Passes/Passes.h"
@@ -34,6 +36,52 @@ namespace mlir {
 namespace approx {
 
 namespace {
+
+static Operation *lookupFunctionLikeByName(ModuleOp moduleOp, StringRef funcName) {
+  for (Operation &op : moduleOp.getBody()->getOperations()) {
+    if (!isa<FunctionOpInterface>(op))
+      continue;
+    auto symName =
+        op.getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
+    if (symName && symName.getValue() == funcName)
+      return &op;
+  }
+  return nullptr;
+}
+
+static bool isInsideTritonFunction(Operation *op) {
+  for (Operation *cur = op; cur != nullptr; cur = cur->getParentOp()) {
+    if (!isa<FunctionOpInterface>(cur))
+      continue;
+    return cur->getName().getStringRef() == "tt.func";
+  }
+  return false;
+}
+
+static SmallVector<Value> createFunctionCall(PatternRewriter &rewriter,
+                                             Location loc,
+                                             Operation *anchorOp,
+                                             TypeRange resultTypes,
+                                             StringRef calleeName,
+                                             ValueRange callArgs) {
+  if (isInsideTritonFunction(anchorOp)) {
+    OperationState callState(loc, "tt.call");
+    callState.addTypes(resultTypes);
+    callState.addAttribute("callee",
+                           SymbolRefAttr::get(rewriter.getContext(),
+                                              calleeName));
+    callState.addOperands(callArgs);
+    Operation *callOp = rewriter.create(callState);
+    return SmallVector<Value>(callOp->getResults().begin(),
+                              callOp->getResults().end());
+  }
+  auto callOp =
+      rewriter.create<func::CallOp>(loc, resultTypes,
+                                    SymbolRefAttr::get(rewriter.getContext(),
+                                                       calleeName),
+                                    callArgs);
+  return SmallVector<Value>(callOp.getResults().begin(), callOp.getResults().end());
+}
 
 // ============================================================================
 // EmitDecideFromAnnotation
@@ -52,7 +100,7 @@ struct EmitDecideFromAnnotation
     // 1. Find the target function
     ModuleOp moduleOp = annotationOp->getParentOfType<ModuleOp>();
     StringRef funcName = annotationOp.getFuncName();
-    auto funcOp = moduleOp.lookupSymbol<func::FuncOp>(funcName);
+    auto *funcOp = lookupFunctionLikeByName(moduleOp, funcName);
     
     if (!funcOp) {
       return annotationOp.emitOpError("Function '") << funcName << "' not found";
@@ -60,7 +108,7 @@ struct EmitDecideFromAnnotation
     
     // 2. Find the first KnobOp in the function
     approx::knobOp knobOp = nullptr;
-    funcOp.walk([&](approx::knobOp op) {
+    funcOp->walk([&](approx::knobOp op) {
       if (!knobOp) {
         knobOp = op;
         return WalkResult::interrupt();
@@ -135,8 +183,13 @@ struct EmitDecideFromAnnotation
     rewriter.setInsertionPointToStart(stateBlock);
 
     // Lookup function to get correct return type (e.g., tensor<i32>)
-    auto stateFuncOp = moduleOp.lookupSymbol<func::FuncOp>(stateFunctionName);
-    if (!stateFuncOp || stateFuncOp.getNumResults() != 1) {
+    auto *stateFuncOp = lookupFunctionLikeByName(moduleOp, stateFunctionName);
+    auto stateFunctionOp = dyn_cast_or_null<FunctionOpInterface>(stateFuncOp);
+    auto stateFunctionType = stateFunctionOp
+                                 ? dyn_cast<FunctionType>(
+                                       stateFunctionOp.getFunctionType())
+                                 : FunctionType();
+    if (!stateFunctionType || stateFunctionType.getNumResults() != 1) {
       return annotationOp.emitOpError("State function '") 
              << stateFunctionName << "' not found or invalid";
     }
@@ -148,14 +201,10 @@ struct EmitDecideFromAnnotation
     }
 
     // Use inferred return type from the function definition
-    auto stateCall = rewriter.create<func::CallOp>(
-        loc,
-        stateFuncOp.getResultTypes(), 
-        SymbolRefAttr::get(rewriter.getContext(), stateFunctionName),
-        callArgs
-    );
-
-    Value stateVal = stateCall.getResult(0);
+    auto stateCallResults = createFunctionCall(
+        rewriter, loc, decideOp, stateFunctionType.getResults(),
+        stateFunctionName, callArgs);
+    Value stateVal = stateCallResults[0];
 
     // [FIX] Normalize to Scalar (Tensor -> Primitive extraction)
     if (auto tensorTy = dyn_cast<TensorType>(stateVal.getType())) {
@@ -203,7 +252,7 @@ struct EmitTryFromAnnotation
     // 1. Find the target function
     ModuleOp moduleOp = annotationOp->getParentOfType<ModuleOp>();
     StringRef funcName = annotationOp.getFuncName();
-    auto funcOp = moduleOp.lookupSymbol<func::FuncOp>(funcName);
+    auto *funcOp = lookupFunctionLikeByName(moduleOp, funcName);
     
     if (!funcOp) {
       return annotationOp.emitOpError("Function '") << funcName << "' not found";
@@ -211,7 +260,7 @@ struct EmitTryFromAnnotation
     
     // 2. Find the first KnobOp in the function
     approx::knobOp knobOp = nullptr;
-    funcOp.walk([&](approx::knobOp op) {
+    funcOp->walk([&](approx::knobOp op) {
       if (!knobOp) {
         knobOp = op;
         return WalkResult::interrupt();
@@ -282,15 +331,12 @@ struct EmitTryFromAnnotation
     if (checkerName.starts_with("@"))
       checkerName = checkerName.drop_front(1);
 
-    auto checkerCall = rewriter.create<func::CallOp>(
-        loc,
-        rewriter.getI1Type(),
-        SymbolRefAttr::get(rewriter.getContext(), checkerName),
-        checkerArgs
-    );
+    auto checkerCallResults = createFunctionCall(
+        rewriter, loc, tryOp, TypeRange{rewriter.getI1Type()}, checkerName,
+        checkerArgs);
 
     // 8. Yield the checker result (i1)
-    rewriter.create<approx::yieldOp>(loc, checkerCall.getResults());
+    rewriter.create<approx::yieldOp>(loc, checkerCallResults);
     
     // 9. Erase the annotation
     rewriter.eraseOp(annotationOp);
@@ -315,7 +361,7 @@ struct EmitTransformFromAnnotation
     // 1. Find the target function
     ModuleOp moduleOp = annotationOp->getParentOfType<ModuleOp>();
     StringRef funcName = annotationOp.getFuncName();
-    auto funcOp = moduleOp.lookupSymbol<func::FuncOp>(funcName);
+    auto *funcOp = lookupFunctionLikeByName(moduleOp, funcName);
     
     if (!funcOp) {
       return annotationOp.emitOpError("Function '") << funcName << "' not found";
@@ -323,7 +369,7 @@ struct EmitTransformFromAnnotation
     
     // 2. Find the first KnobOp in the function
     approx::knobOp knobOp = nullptr;
-    funcOp.walk([&](approx::knobOp op) {
+    funcOp->walk([&](approx::knobOp op) {
       if (!knobOp) {
         knobOp = op;
         return WalkResult::interrupt();

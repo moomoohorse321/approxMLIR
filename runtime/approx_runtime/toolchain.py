@@ -20,6 +20,7 @@ class WorkloadType(Enum):
 
     ML = "ml"    # JAX/StableHLO -> IREE
     CPP = "cpp"  # C++/Polygeist -> native
+    TRITON = "triton"  # Triton TTIR -> plugin pass manager
 
 
 @dataclass
@@ -31,6 +32,9 @@ class ToolchainConfig:
     )
     cpp_opt_path: str = field(
         default_factory=lambda: os.environ.get("APPROX_OPT_CPP", "approx-opt-cpp")
+    )
+    triton_plugin_path: str = field(
+        default_factory=lambda: os.environ.get("TRITON_PASS_PLUGIN_PATH", "")
     )
 
     ml_pipeline: List[str] = field(
@@ -52,16 +56,39 @@ class ToolchainConfig:
             "finalize-approx",
         ]
     )
+    triton_pipeline: List[str] = field(
+        default_factory=lambda: [
+            "emit-approx",
+            "emit-management",
+            "config-approx",
+            "transform-approx",
+            "finalize-approx",
+        ]
+    )
 
     def get_opt_path(self, workload: WorkloadType) -> str:
         """Get approx-opt path for workload type."""
-        return self.ml_opt_path if workload == WorkloadType.ML else self.cpp_opt_path
+        if workload == WorkloadType.ML:
+            return self.ml_opt_path
+        if workload == WorkloadType.CPP:
+            return self.cpp_opt_path
+        raise ValueError(
+            "WorkloadType.TRITON does not use approx-opt; "
+            "use plugin pass manager integration instead."
+        )
 
     def get_pipeline(
         self, workload: WorkloadType, config: Optional[dict] = None
     ) -> List[str]:
         """Get pass pipeline for workload type, adjusted for config."""
-        base = self.ml_pipeline if workload == WorkloadType.ML else self.cpp_pipeline
+        if workload == WorkloadType.ML:
+            base = self.ml_pipeline
+        elif workload == WorkloadType.CPP:
+            base = self.cpp_pipeline
+        elif workload == WorkloadType.TRITON:
+            base = self.triton_pipeline
+        else:
+            raise ValueError(f"Unsupported workload type: {workload}")
         pipeline = list(base)
 
         if config and needs_pre_emit_transform(config):

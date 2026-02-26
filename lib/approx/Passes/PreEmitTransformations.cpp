@@ -10,6 +10,8 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/SymbolTable.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -80,29 +82,42 @@ struct PreEmitFuncConversion
   }
 
   
-  /// Convert a function to a wrapper that calls an internal implementation
-  void convertToCall(func::FuncOp funcOp, PatternRewriter &rewriter) const {
+  /// Convert a function-like op to a wrapper that calls an internal implementation.
+  /// Supports both `func.func` and Triton `tt.func`.
+  void convertToCall(Operation *funcLikeOp, PatternRewriter &rewriter) const {
+    auto functionOp = dyn_cast<FunctionOpInterface>(funcLikeOp);
+    assert(functionOp && "convertToCall expects a FunctionOpInterface op");
+    auto functionType = dyn_cast<FunctionType>(functionOp.getFunctionType());
+    if (!functionType) {
+      funcLikeOp->emitError("expected function-like op with FunctionType");
+      return;
+    }
+    auto symbolNameAttr = funcLikeOp->getAttrOfType<StringAttr>(
+        SymbolTable::getSymbolAttrName());
+    assert(symbolNameAttr && "function-like op must have symbol name");
+
     // Generate internal function name (e.g., main -> __internal_main)
-    std::string internalName = "__internal_" + funcOp.getSymName().str();
+    std::string internalName = "__internal_" + symbolNameAttr.str();
 
     
     // Clone the original function with the new internal name
-    auto clonedFunc = funcOp.clone();
-    clonedFunc.setSymName(internalName);
+    auto *clonedFunc = funcLikeOp->clone();
+    clonedFunc->setAttr(SymbolTable::getSymbolAttrName(),
+                        rewriter.getStringAttr(internalName));
     
     // Insert the cloned function right BEFORE the original
-    rewriter.setInsertionPoint(funcOp);
+    rewriter.setInsertionPoint(funcLikeOp);
     rewriter.insert(clonedFunc);
     
     // Clear the original function's body
-    Region &funcBody = funcOp.getBody();
+    Region &funcBody = funcLikeOp->getRegion(0);
     eraseRegion(&funcBody, rewriter);
     
     // Create a new entry block for the wrapper function
-    SmallVector<Location> argLocs(funcOp.getFunctionType().getNumInputs(), 
-                               funcOp.getLoc());
+    SmallVector<Location> argLocs(functionType.getNumInputs(),
+                                  funcLikeOp->getLoc());
     Block *entryBlock = rewriter.createBlock(&funcBody, funcBody.end(),
-                                              funcOp.getFunctionType().getInputs(), argLocs);
+                                             functionType.getInputs(), argLocs);
     
     // Set insertion point inside the new block
     rewriter.setInsertionPointToStart(entryBlock);
@@ -114,17 +129,45 @@ struct PreEmitFuncConversion
     }
     
     // Create the call to the internal function
-    auto callOp = rewriter.create<func::CallOp>(
-        funcOp.getLoc(),
-        funcOp.getFunctionType().getResults(),
-        SymbolRefAttr::get(rewriter.getContext(), internalName),
-        callOperands);
+    Operation *callOp = nullptr;
+    if (funcLikeOp->getName().getStringRef() == "func.func") {
+      callOp = rewriter
+                   .create<func::CallOp>(funcLikeOp->getLoc(),
+                                         functionType.getResults(),
+                                         SymbolRefAttr::get(
+                                             rewriter.getContext(), internalName),
+                                         callOperands)
+                   .getOperation();
+    } else if (funcLikeOp->getName().getStringRef() == "tt.func") {
+      OperationState callState(funcLikeOp->getLoc(), "tt.call");
+      callState.addOperands(callOperands);
+      callState.addTypes(functionType.getResults());
+      callState.addAttribute(
+          "callee", FlatSymbolRefAttr::get(rewriter.getContext(), internalName));
+      callOp = rewriter.create(callState);
+    } else {
+      funcLikeOp->emitError("unsupported function-like op for pre-emit transform: ")
+          << funcLikeOp->getName();
+      return;
+    }
     
     // Create return operation with the results from the call
-    if (funcOp.getFunctionType().getNumResults() > 0) {
-      rewriter.create<func::ReturnOp>(funcOp.getLoc(), callOp.getResults());
+    if (functionType.getNumResults() > 0) {
+      if (funcLikeOp->getName().getStringRef() == "func.func") {
+        rewriter.create<func::ReturnOp>(funcLikeOp->getLoc(),
+                                        callOp->getResults());
+      } else {
+        OperationState retState(funcLikeOp->getLoc(), "tt.return");
+        retState.addOperands(callOp->getResults());
+        rewriter.create(retState);
+      }
     } else {
-      rewriter.create<func::ReturnOp>(funcOp.getLoc());
+      if (funcLikeOp->getName().getStringRef() == "func.func") {
+        rewriter.create<func::ReturnOp>(funcLikeOp->getLoc());
+      } else {
+        OperationState retState(funcLikeOp->getLoc(), "tt.return");
+        rewriter.create(retState);
+      }
     }
   }
   
@@ -137,9 +180,11 @@ struct PreEmitFuncConversion
     // Iterate through the region to locate the <func_name> function
     for (Block &block : parentRegion->getBlocks()) {
       for (Operation &op : block.getOperations()) {
-        if (auto funcOp = dyn_cast<func::FuncOp>(op)) {
-          if (funcOp.getSymName().compare(func_name) == 0) {
-            convertToCall(funcOp, rewriter);
+        auto symbolNameAttr =
+            op.getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
+        if (symbolNameAttr && isa<FunctionOpInterface>(op)) {
+          if (symbolNameAttr.getValue().compare(func_name) == 0) {
+            convertToCall(&op, rewriter);
             break; 
           }
         }

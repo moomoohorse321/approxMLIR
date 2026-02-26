@@ -185,6 +185,21 @@ class TestCompile:
         call_args = mock_run.call_args[0][0]
         assert '--pre-emit-transform' in call_args
 
+    @patch('approx_runtime.compiler.compile_with_triton_plugin')
+    def test_compile_triton_dispatch(self, mock_triton_compile):
+        mock_triton_compile.return_value = "ttir output"
+        result = compile("module { }", workload=WorkloadType.TRITON, passes=["emit-approx"])
+        assert result == "ttir output"
+        mock_triton_compile.assert_called_once()
+
+    @patch('approx_runtime.compiler.compile_with_triton_plugin')
+    def test_compile_triton_auto_adds_pre_emit(self, mock_triton_compile):
+        mock_triton_compile.return_value = "ttir output"
+        mlir = 'module { "approx.util.annotation.convert_to_call"() <{func_name = "f"}> : () -> () }'
+        compile(mlir, workload=WorkloadType.TRITON, toolchain=None)
+        called_passes = mock_triton_compile.call_args.kwargs["passes"]
+        assert called_passes[0] == "pre-emit-transform"
+
 
 class TestCompileFile:
     @patch('subprocess.run')

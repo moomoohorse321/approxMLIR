@@ -16,6 +16,7 @@ add_mlir_dialect_library(MLIRApproxTransforms
   MLIRapproxPassIncGen
 
   LINK_LIBS PUBLIC
+  MLIRapprox
   MLIRAffineDialect
   MLIRArithDialect
   MLIRAsyncDialect

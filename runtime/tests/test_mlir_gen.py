@@ -66,6 +66,7 @@ class TestGenerateAnnotations:
         result = generate_annotations("my_func", config)
         
         assert 'approx.util.annotation.try' in result
+        assert 'approx.util.annotation.knob' in result
         assert 'func_name = "my_func"' in result
         assert 'checker = "checker"' in result
         assert 'recover = "recover"' in result
@@ -83,6 +84,7 @@ class TestGenerateAnnotations:
         result = generate_annotations("kernel", config)
         
         assert 'approx.util.annotation.transform' in result
+        assert 'approx.util.annotation.knob' in result
         assert 'func_name = "kernel"' in result
         assert 'transform_type = "loop_perforate"' in result
         assert 'knob_val = 3 : i32' in result
