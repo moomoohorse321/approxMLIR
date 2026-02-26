@@ -83,6 +83,26 @@ import approx_runtime as ar
 compiled = ar.compile(mlir_text, workload=ar.WorkloadType.CPP)
 ```
 
+Triton plugin path (no `approx-opt`):
+
+```python
+import approx_runtime as ar
+pipeline = ar.get_pipeline_for_config(config, workload=ar.WorkloadType.TRITON)
+hook = ar.make_triton_stages_hook(
+    passes=pipeline,
+    plugin_path="/path/to/libApproxTritonPlugin.so",
+    func_name="add_kernel",
+    config=config,  # inject approx.util.annotation.* into TTIR before passes
+    extra_ttir_texts=[approx_ttir_text],  # optional: provide explicit approx_* TTIR defs
+)
+# assign hook to triton.knobs.runtime.add_stages_inspection_hook
+```
+
+Notes:
+- For `func_substitute`, the hook auto-adds `pre-emit-transform` if needed.
+- Provide explicit `approx_<func>_<knob>` TTIR via `extra_ttir_texts` to demonstrate a real substitution.
+- If explicit `approx_<func>_<knob>` is missing, the hook falls back to cloning `tt.func @<func>` (semantic no-op).
+
 ## Non-Invasive JAX API
 
 Apply configurations at call-time without decorators:
@@ -369,6 +389,7 @@ Command-line options include:
 ### Examples
 
 - `examples/example_w_tuning.py` (JAX tuning)
+- `examples/example_triton_wo_tuning.py` (Triton plugin pass-manager path)
 - `examples/benchmark/example_lavamd_tuning.py` (C++ tuning via cgeist)
 - `examples/benchmark/example_bm25_tuning.py` (C++ tuning via cgeist)
 - `examples/benchmark/example_choose_tuning.py` (C++ tuning via cgeist)
