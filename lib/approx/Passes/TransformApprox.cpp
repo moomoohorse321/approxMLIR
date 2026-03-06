@@ -29,6 +29,9 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/SymbolTable.h"
+#include "mlir/Interfaces/CallInterfaces.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -60,14 +63,21 @@ namespace {
 struct FunctionSubstitution : public OpRewritePattern<approx::transformOp> {
   using OpRewritePattern<approx::transformOp>::OpRewritePattern;
   // if there is an Op called approx_<name> in the module, we can replace it.
-  static func::FuncOp findReplacingFunc(func::FuncOp funcOp, Region *parentRegion, int approx_knob_num) {
-    func::FuncOp approxFunc = nullptr;
-    auto approxFuncName = "approx_" + funcOp.getName().str() + "_" + std::to_string(approx_knob_num);
+  static Operation *findReplacingFunc(Operation *funcLikeOp, Region *parentRegion,
+                                      int approx_knob_num) {
+    auto symName = funcLikeOp->getAttrOfType<StringAttr>(
+        SymbolTable::getSymbolAttrName());
+    assert(symName && "function-like op must have symbol name");
+    Operation *approxFunc = nullptr;
+    auto approxFuncName =
+        "approx_" + symName.str() + "_" + std::to_string(approx_knob_num);
     for (Block &block : parentRegion->getBlocks()) {
       for (Operation &op : block.getOperations()) {
-        auto _funcOp = dyn_cast<func::FuncOp>(op);
-        if (_funcOp && _funcOp.getName() == approxFuncName) {
-          approxFunc = _funcOp;
+        auto _symName = op.getAttrOfType<StringAttr>(
+            SymbolTable::getSymbolAttrName());
+        if (_symName && isa<FunctionOpInterface>(op) &&
+            _symName.getValue() == approxFuncName) {
+          approxFunc = &op;
           break;
         }
       }
@@ -90,8 +100,8 @@ struct FunctionSubstitution : public OpRewritePattern<approx::transformOp> {
     if (0 != transformType.compare(StringRef("func_substitute")))
       return failure();
     
-    // find the parent funcOp (since current region can be deeply nested)
-    Operation* parentFuncOp = transformOp; 
+    // find the nearest parent function-like op (since current region can be deeply nested)
+    Operation *parentFuncOp = transformOp;
     int32_t decisionValue = transformOp.getKnobVal();
 
     if(!decisionValue) { // fall back to the exact form
@@ -99,13 +109,18 @@ struct FunctionSubstitution : public OpRewritePattern<approx::transformOp> {
       return success();
     }
 
-    while(!dyn_cast<func::FuncOp>(parentFuncOp->getParentOp())) 
+    while (parentFuncOp && !isa<FunctionOpInterface>(parentFuncOp))
       parentFuncOp = parentFuncOp->getParentOp();
-    parentFuncOp = parentFuncOp->getParentOp();
+    if (!parentFuncOp)
+      return failure();
     Region *parentRegion = parentFuncOp->getParentRegion();
-    func::FuncOp approxFunc = findReplacingFunc(dyn_cast<func::FuncOp>(parentFuncOp), parentRegion, decisionValue);
+    Operation *approxFunc =
+        findReplacingFunc(parentFuncOp, parentRegion, decisionValue);
 
-    assert(approxFunc && "func_substitute transformOp must be replaced by an approx function (not available).");
+    if (!approxFunc) {
+      return transformOp.emitOpError(
+          "func_substitute target function not found in module");
+    }
     
     // it's assumed that the region that contains transformOp only has one additonal op (which is a call to __internal_<func_name>)
     // your task: change the call __internal_<func_name> to call approx_<func_name>
@@ -116,31 +131,35 @@ struct FunctionSubstitution : public OpRewritePattern<approx::transformOp> {
       return success();
     }
 
-    // Find the call operation in the same block as the transformOp
+    // Find the call operation in the same block as the transformOp.
+    // Supports both `func.call` and `tt.call` by using call interface + callee attr.
     Block *block = transformOp->getBlock();
-    func::CallOp callOp = nullptr;
+    Operation *callOp = nullptr;
     
     // Look for the CallOp in the same block
     for (Operation &op : block->getOperations()) {
-      if (auto call = dyn_cast<func::CallOp>(&op)) {
-        callOp = call;
+      if (isa<CallOpInterface>(op) && op.hasAttr("callee")) {
+        callOp = &op;
         break;
       }
     }
 
-    assert(callOp);
-    
-    // Create a new call to the approximate function with the same arguments
-    rewriter.setInsertionPoint(callOp);
-    auto newCall = rewriter.create<func::CallOp>(
-        callOp.getLoc(), 
-        approxFunc.getSymName(), 
-        callOp.getResultTypes(), 
-        callOp.getOperands()
-    );
-    
-    // Replace all uses of the old call with the new call
-    rewriter.replaceOp(callOp, newCall.getResults());
+    if (!callOp) {
+      return transformOp.emitOpError(
+          "func_substitute requires a call op in the same block as approx.transform");
+    }
+
+    auto approxSymName = approxFunc->getAttrOfType<StringAttr>(
+        SymbolTable::getSymbolAttrName());
+    if (!approxSymName) {
+      return transformOp.emitOpError(
+          "replacement function must carry a symbol name");
+    }
+    rewriter.modifyOpInPlace(callOp, [&]() {
+      callOp->setAttr("callee",
+                      FlatSymbolRefAttr::get(rewriter.getContext(),
+                                             approxSymName.getValue()));
+    });
 
     rewriter.eraseOp(transformOp);
     

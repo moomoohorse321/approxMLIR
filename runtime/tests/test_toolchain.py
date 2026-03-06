@@ -42,3 +42,13 @@ def test_get_pipeline_safety_contract_removes_legalize():
     config = {"safety_contract": object()}
     pipeline = tc.get_pipeline(WorkloadType.ML, config)
     assert "legalize-to-stablehlo" not in pipeline
+
+
+def test_get_pipeline_triton_uses_triton_pipeline():
+    tc = ToolchainConfig(
+        ml_pipeline=["emit-approx", "legalize-to-stablehlo"],
+        cpp_pipeline=["emit-approx"],
+        triton_pipeline=["emit-approx", "finalize-approx"],
+    )
+    pipeline = tc.get_pipeline(WorkloadType.TRITON, {})
+    assert pipeline == ["emit-approx", "finalize-approx"]

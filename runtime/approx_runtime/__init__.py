@@ -26,6 +26,14 @@ from .compiler import (
     WorkloadType,
     ToolchainConfig,
 )
+from .triton_compiler import (
+    TRITON_AVAILABLE,
+    TritonCompilationError,
+    compile_with_triton_plugin,
+)
+from .triton_hook import (
+    make_triton_stages_hook,
+)
 
 from .export import (
     export_to_mlir,
@@ -103,6 +111,10 @@ __all__ = [
     'get_pipeline_for_config',
     'WorkloadType',
     'ToolchainConfig',
+    'TRITON_AVAILABLE',
+    'TritonCompilationError',
+    'compile_with_triton_plugin',
+    'make_triton_stages_hook',
     # JAX export
     'export_to_mlir',
     'export_module',

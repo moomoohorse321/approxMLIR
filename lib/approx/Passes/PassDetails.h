@@ -1,4 +1,4 @@
-//===- PassDetails.h - polygeist pass class details ----------------*- C++
+//===- PassDetails.h - approx pass class details ------------------*- C++
 //-*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -6,13 +6,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-//
-// Stuff shared between the different polygeist passes.
-//
-//===----------------------------------------------------------------------===//
 
-// clang-tidy seems to expect the absolute path in the header guard on some
-// systems, so just disable it.
 // NOLINTNEXTLINE(llvm-header-guard)
 #ifndef DIALECT_APPROX_TRANSFORMS_PASSDETAILS_H
 #define DIALECT_APPROX_TRANSFORMS_PASSDETAILS_H
@@ -29,10 +23,16 @@ namespace approx {
 
 class approxDialect;
 
-#define GEN_PASS_CLASSES
+#define GEN_PASS_DEF_PREEMITTRANSFORMATIONPASS
+#define GEN_PASS_DEF_EMITAPPROXPASS
+#define GEN_PASS_DEF_EMITMANAGEMENTPASS
+#define GEN_PASS_DEF_CONFIGAPPROXPASS
+#define GEN_PASS_DEF_TRANSFORMAPPROXPASS
+#define GEN_PASS_DEF_FINALIZEAPPROXPASS
+#define GEN_PASS_DEF_LEGALIZETOSTABLEHLOPASS
 #include "approx/Passes/Passes.h.inc"
 
-} // namespace polygeist
+} // namespace approx
 } // namespace mlir
 
-#endif // DIALECT_POLYGEIST_TRANSFORMS_PASSDETAILS_H
+#endif // DIALECT_APPROX_TRANSFORMS_PASSDETAILS_H

@@ -109,9 +109,18 @@ def generate_annotations(func_name: str, config: dict) -> str:
     thresholds = array<i32: {thresholds_str}>,
     decisions = array<i32: {decisions_str}>
   }}> : () -> ()''')
-    
-    # Safety contract annotation
+
+    # If we don't have a decision tree, but do have management annotations
+    # (try/static transform), emit a plain knob annotation so emit-approx
+    # creates the knobOp container before emit-management runs.
     sc = config.get('safety_contract')
+    st = config.get('static_transform')
+    if (not dt) and (sc or st):
+        ops.append(f'''  "approx.util.annotation.knob"() <{{
+    func_name = "{func_name}"
+  }}> : () -> ()''')
+
+    # Safety contract annotation
     if sc:
         checker_name = sc.checker.__name__
         recover_name = sc.recover.__name__
@@ -123,7 +132,6 @@ def generate_annotations(func_name: str, config: dict) -> str:
   }}> : () -> ()''')
     
     # Static transform annotation
-    st = config.get('static_transform')
     if st:
         ops.append(f'''  "approx.util.annotation.transform"() <{{
     func_name = "{func_name}",

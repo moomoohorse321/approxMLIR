@@ -9,6 +9,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -33,6 +34,40 @@ namespace {
 [[maybe_unused]] static void dump_region(Region *region) {
   for (Block &block : region->getBlocks())
     block.dump();
+}
+
+static bool isInsideTritonFunction(Operation *op) {
+  for (Operation *cur = op; cur != nullptr; cur = cur->getParentOp()) {
+    if (!isa<FunctionOpInterface>(cur))
+      continue;
+    return cur->getName().getStringRef() == "tt.func";
+  }
+  return false;
+}
+
+static SmallVector<Value> createFunctionCall(PatternRewriter &rewriter,
+                                             Location loc,
+                                             Operation *anchorOp,
+                                             TypeRange resultTypes,
+                                             StringRef calleeName,
+                                             ValueRange callArgs) {
+  if (isInsideTritonFunction(anchorOp)) {
+    OperationState callState(loc, "tt.call");
+    callState.addTypes(resultTypes);
+    callState.addAttribute("callee",
+                           SymbolRefAttr::get(rewriter.getContext(),
+                                              calleeName));
+    callState.addOperands(callArgs);
+    Operation *callOp = rewriter.create(callState);
+    return SmallVector<Value>(callOp->getResults().begin(),
+                              callOp->getResults().end());
+  }
+  auto callOp =
+      rewriter.create<func::CallOp>(loc, resultTypes,
+                                    SymbolRefAttr::get(rewriter.getContext(),
+                                                       calleeName),
+                                    callArgs);
+  return SmallVector<Value>(callOp.getResults().begin(), callOp.getResults().end());
 }
 
 struct FinalizeDecisionTree : public OpRewritePattern<approx::yieldOp> {
@@ -293,11 +328,9 @@ struct ConfigureTry : public OpRewritePattern<approx::TryOp> {
     
     {
       rewriter.setInsertionPointToStart(&ifOp.getElseRegion().front());
-      auto recoverCall = rewriter.create<func::CallOp>(
-          loc, resultTypes,
-          SymbolRefAttr::get(rewriter.getContext(), recoverFuncName),
-          recoveryArgs);
-      rewriter.create<scf::YieldOp>(loc, recoverCall.getResults());
+      auto recoverCallResults = createFunctionCall(
+          rewriter, loc, tryOp, resultTypes, recoverFuncName, recoveryArgs);
+      rewriter.create<scf::YieldOp>(loc, recoverCallResults);
     }
     
     rewriter.setInsertionPoint(yieldOp);

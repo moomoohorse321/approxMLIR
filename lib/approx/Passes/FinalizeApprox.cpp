@@ -14,6 +14,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "approx/Passes/Passes.h"
@@ -98,9 +99,17 @@ struct RemoveRemainingYields : public OpRewritePattern<approx::yieldOp> {
     
     Operation *parentOp = yieldOp->getParentOp();
     
-    // If parent is a func.func, this is likely a leftover - convert to return
+    // If parent is a func-like op, convert to matching return dialect op.
     if (auto funcOp = dyn_cast<func::FuncOp>(parentOp)) {
       rewriter.replaceOpWithNewOp<func::ReturnOp>(yieldOp, yieldOp.getOperands());
+      return success();
+    }
+    if (isa<FunctionOpInterface>(parentOp) &&
+        parentOp->getName().getStringRef() == "tt.func") {
+      rewriter.setInsertionPoint(yieldOp);
+      OperationState retState(yieldOp.getLoc(), "tt.return");
+      retState.addOperands(yieldOp.getOperands());
+      rewriter.replaceOp(yieldOp, rewriter.create(retState)->getResults());
       return success();
     }
     
