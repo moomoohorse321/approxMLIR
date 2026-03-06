@@ -1,4 +1,6 @@
 *.mlir
 *.txt
 *.db
+*.json
 __pycache__/
+opentuner.db/
