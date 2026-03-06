@@ -101,10 +101,6 @@ cache_utils.StaticCache.get_seq_length = _patched_get_seq_length
 # The original uses x.at[indexes].set(source) which generates stablehlo.scatter
 # that IREE can't compile (dimension map bug). For contiguous indices (like KV
 # cache updates), dynamic_update_slice is equivalent and IREE handles it fine.
-# Patch torchax's index_put to use dynamic_update_slice instead of scatter.
-# The original x.at[indexes].set(values) generates stablehlo.scatter which
-# IREE can't compile (dimension map bug). For contiguous slice updates (like
-# KV cache), dynamic_update_slice is equivalent and IREE handles it fine.
 import torchax.ops.jaten as _jaten  # trigger op registration
 from torchax.ops.ops_registry import all_aten_ops as _all_ops
 
@@ -199,7 +195,7 @@ jitted_decode = torchax.interop.jax_jit(decode_one)
 # ===================================================================
 # Step 4: Eager-mode validation (CPU via torchax)
 # ===================================================================
-print(f"\n--- Step 3: Eager-mode validation ---")
+print(f"\n--- Step 4: Eager-mode validation ---")
 
 messages = [{"role": "user", "content": PROMPT}]
 prompt_ids = tokenizer.apply_chat_template(
@@ -247,65 +243,61 @@ print(f"Output   : {text}")
 # ===================================================================
 # Step 5: Export to StableHLO via jax.export
 # ===================================================================
-print(f"\n--- Step 4: Exporting to StableHLO ---")
+print(f"\n--- Step 5: Exporting to StableHLO ---")
 
-# Build abstract shape specs for jax.export.
-# torchax tensors wrap JAX arrays in ._elem; extract to get JAX shapes/dtypes.
+# torchax tensors wrap JAX arrays in ._elem; extract the underlying JAX array.
+def _unwrap_torchax(x):
+    return x._elem if hasattr(x, '_elem') else x
+
 def _to_jax_shape(x):
-    if hasattr(x, '_elem'):
-        j = x._elem
-        return jax.ShapeDtypeStruct(j.shape, j.dtype)
-    return jax.ShapeDtypeStruct(x.shape, x.dtype)
+    j = _unwrap_torchax(x)
+    return jax.ShapeDtypeStruct(j.shape, j.dtype)
 
 weights_shapes = jax.tree.map(_to_jax_shape, model_weights)
 buffers_shapes = jax.tree.map(_to_jax_shape, model_buffers)
 kv_shapes = jax.tree.map(_to_jax_shape, cache)
 
-# Export prefill (full prompt)
-prefill_mlir = None
-try:
-    prefill_shapes = (
+jitted_jax_decode = jax.jit(jax_decode)
+
+def export_mlir(name, seq_len, filename):
+    """Export a single StableHLO module and write to file."""
+    shapes = (
         weights_shapes,
         buffers_shapes,
-        jax.ShapeDtypeStruct((1, SEQ_LEN), jnp.int32),
-        jax.ShapeDtypeStruct((SEQ_LEN,), jnp.int32),
+        jax.ShapeDtypeStruct((1, seq_len), jnp.int32),
+        jax.ShapeDtypeStruct((seq_len,), jnp.int32),
         kv_shapes,
     )
-    exported = jax_export.export(jax.jit(jax_decode))(*prefill_shapes)
-    prefill_mlir = str(exported.mlir_module())
-    with open("qwen_prefill.mlir", "w") as f:
-        f.write(prefill_mlir)
-    print(f"Prefill  : {len(prefill_mlir):,} chars -> qwen_prefill.mlir")
+    exported = jax_export.export(jitted_jax_decode)(*shapes)
+    mlir = str(exported.mlir_module())
+    with open(filename, "w") as f:
+        f.write(mlir)
+    print(f"{name:9s}: {len(mlir):,} chars -> {filename}")
+    return mlir
+
+prefill_mlir = decode_mlir = None
+try:
+    prefill_mlir = export_mlir("Prefill", SEQ_LEN, "qwen_prefill.mlir")
 except Exception as e:
     print(f"Prefill export failed: {e}")
     import traceback; traceback.print_exc()
-
-# Export decode (single token)
-decode_mlir = None
 try:
-    decode_shapes = (
-        weights_shapes,
-        buffers_shapes,
-        jax.ShapeDtypeStruct((1, 1), jnp.int32),
-        jax.ShapeDtypeStruct((1,), jnp.int32),
-        kv_shapes,
-    )
-    exported = jax_export.export(jax.jit(jax_decode))(*decode_shapes)
-    decode_mlir = str(exported.mlir_module())
-    with open("qwen_decode.mlir", "w") as f:
-        f.write(decode_mlir)
-    print(f"Decode   : {len(decode_mlir):,} chars -> qwen_decode.mlir")
+    decode_mlir = export_mlir("Decode", 1, "qwen_decode.mlir")
 except Exception as e:
     print(f"Decode export failed: {e}")
     import traceback; traceback.print_exc()
+
+export_ok = (prefill_mlir is not None, decode_mlir is not None)
 
 # ===================================================================
 # Step 6: Compile to IREE and load
 # ===================================================================
 import approx_runtime as ar
 
-iree_backend = "cuda" if BACKEND == "cuda" else "llvm-cpu"
-runtime_backend = BACKEND if BACKEND == "cuda" else "cpu"
+BACKEND_MAP = {"cuda": ("cuda", "cuda"), "llvm-cpu": ("llvm-cpu", "cpu"), "cpu": ("llvm-cpu", "cpu")}
+if BACKEND not in BACKEND_MAP:
+    raise ValueError(f"Unknown backend {BACKEND!r}, expected one of {list(BACKEND_MAP)}")
+iree_backend, runtime_backend = BACKEND_MAP[BACKEND]
 
 
 def compile_and_load(mlir_text, name, backend, rt_backend):
@@ -326,112 +318,81 @@ def compile_and_load(mlir_text, name, backend, rt_backend):
 
 
 prefill_mod = decode_mod = None
-if prefill_mlir or decode_mlir:
-    print(f"\n--- Step 5: Compiling with IREE (backend={iree_backend}) ---")
+if prefill_mlir and decode_mlir:
+    print(f"\n--- Step 6: Compiling with IREE (backend={iree_backend}) ---")
 
-# Track which backend each module uses (must match for buffer sharing)
-actual_backend = iree_backend
-actual_rt_backend = runtime_backend
+    # Both modules must share a backend for buffer compatibility.
+    # Try preferred backend first, fall back to llvm-cpu.
+    backends_to_try = [(iree_backend, runtime_backend)]
+    if iree_backend != "llvm-cpu":
+        backends_to_try.append(("llvm-cpu", "cpu"))
 
-if prefill_mlir:
-    try:
-        prefill_mod = compile_and_load(prefill_mlir, "prefill", iree_backend, runtime_backend)
-    except Exception as e:
-        print(f"  Prefill IREE {iree_backend} failed, falling back to llvm-cpu...")
-        actual_backend = "llvm-cpu"
-        actual_rt_backend = "cpu"
+    for be, rt in backends_to_try:
         try:
-            prefill_mod = compile_and_load(prefill_mlir, "prefill", "llvm-cpu", "cpu")
-        except Exception as e2:
-            print(f"  Prefill IREE llvm-cpu also failed: {e2}")
+            prefill_mod = compile_and_load(prefill_mlir, "prefill", be, rt)
+            decode_mod = compile_and_load(decode_mlir, "decode", be, rt)
+            break
+        except Exception as e:
+            print(f"  IREE {be} failed: {e}")
+            if be != "llvm-cpu":
+                print(f"  Falling back to llvm-cpu...")
+            prefill_mod = decode_mod = None
 
-if decode_mlir:
-    try:
-        decode_mod = compile_and_load(decode_mlir, "decode", actual_backend, actual_rt_backend)
-    except Exception as e:
-        if actual_backend != "llvm-cpu":
-            print(f"  Decode IREE {actual_backend} failed, falling back to llvm-cpu...")
-            # Both must use same backend for buffer sharing. Re-compile prefill too.
-            actual_backend = "llvm-cpu"
-            actual_rt_backend = "cpu"
-            if prefill_mlir:
-                print(f"  Re-compiling prefill on llvm-cpu for buffer compatibility...")
-                try:
-                    prefill_mod = compile_and_load(prefill_mlir, "prefill", "llvm-cpu", "cpu")
-                except Exception as e3:
-                    print(f"  Prefill IREE llvm-cpu failed: {e3}")
-            try:
-                decode_mod = compile_and_load(decode_mlir, "decode", "llvm-cpu", "cpu")
-            except Exception as e2:
-                print(f"  Decode IREE llvm-cpu also failed: {e2}")
-        else:
-            print(f"  Decode IREE llvm-cpu failed: {e}")
+    # Free MLIR strings after compilation
+    prefill_mlir = decode_mlir = None
 
 # ===================================================================
 # Step 7: Run full inference via IREE-compiled modules
 # ===================================================================
 if prefill_mod and decode_mod:
-    print(f"\n--- Step 6: IREE inference ---")
+    print(f"\n--- Step 7: IREE inference ---")
 
-    def get_main(modules):
-        for k, mod in modules.items():
-            if k != "hal":
-                return mod["main"]
-
-    iree_prefill = get_main(prefill_mod)
-    iree_decode = get_main(decode_mod)
+    iree_prefill = prefill_mod.jit_call_torch["main"]
+    iree_decode = decode_mod.jit_call_torch["main"]
 
     # Flatten all inputs to numpy arrays in pytree order.
-    # Extract underlying JAX arrays from torchax tensors first.
-    def _to_jax(x):
-        return x._elem if hasattr(x, '_elem') else x
+    weights_flat, _ = jax.tree.flatten(jax.tree.map(_unwrap_torchax, model_weights))
+    buffers_flat, _ = jax.tree.flatten(jax.tree.map(_unwrap_torchax, model_buffers))
+    cache_flat, _ = jax.tree.flatten(jax.tree.map(_unwrap_torchax, cache))
 
-    weights_flat, _ = jax.tree.flatten(jax.tree.map(_to_jax, model_weights))
-    buffers_flat, _ = jax.tree.flatten(jax.tree.map(_to_jax, model_buffers))
-    cache_flat, _ = jax.tree.flatten(jax.tree.map(_to_jax, cache))
+    weights_np = [np.asarray(w) for w in weights_flat]
+    buffers_np = [np.asarray(b) for b in buffers_flat]
+    cache_np = [np.asarray(c) for c in cache_flat]
 
-    weights_np = [np.array(w) for w in weights_flat]
-    buffers_np = [np.array(b) for b in buffers_flat]
-    cache_np = [np.array(c) for c in cache_flat]
-
-    input_ids_np = np.array(prompt_ids, dtype=np.int32)
+    input_ids_np = np.asarray(prompt_ids, dtype=np.int32)
     cache_pos_np = np.arange(SEQ_LEN, dtype=np.int32)
 
     # -- IREE Prefill (warmup + timed) --
     all_prefill_inputs = weights_np + buffers_np + [input_ids_np, cache_pos_np] + cache_np
-    prefill_out = iree_prefill(*all_prefill_inputs)  # warmup
+    _ = iree_prefill(*all_prefill_inputs)  # warmup
+    del _
 
     t0 = time.perf_counter()
     prefill_out = iree_prefill(*all_prefill_inputs)
     t1 = time.perf_counter()
 
     # Output structure: (logits, kv_cache_leaves...)
-    # logits is first, then StaticCache key/value tensors
-    iree_logits = np.array(prefill_out[0].to_host())
+    iree_logits = np.asarray(prefill_out[0].to_host())
     print(f"Prefill  : {t1-t0:.4f}s  logits.shape={iree_logits.shape}")
 
     first_tok = int(np.argmax(iree_logits[0, -1, :]))
     print(f"First tok: '{tokenizer.decode([first_tok])}'")
 
     # -- IREE Decode loop --
-    # StaticCache has fixed shape, so we can reuse the decode module
-    # for every step — only the token and cache_position change.
+    # StaticCache has fixed shape — only the token and cache_position change.
     kv_buffers = [prefill_out[i] for i in range(1, len(prefill_out))]
     iree_generated = [first_tok]
+    static_inputs = weights_np + buffers_np  # constant across steps
 
     t_decode_start = time.perf_counter()
     for step in range(MAX_NEW_TOKENS - 1):
         next_tok_np = np.array([[iree_generated[-1]]], dtype=np.int32)
         pos_np = np.array([SEQ_LEN + step], dtype=np.int32)
 
-        all_decode_inputs = weights_np + buffers_np + [next_tok_np, pos_np] + kv_buffers
-        decode_out = iree_decode(*all_decode_inputs)
+        decode_out = iree_decode(*(static_inputs + [next_tok_np, pos_np] + kv_buffers))
 
-        decode_logits = np.array(decode_out[0].to_host())
-        tok = int(np.argmax(decode_logits[0, -1, :]))
+        tok = int(np.argmax(np.asarray(decode_out[0].to_host())[0, -1, :]))
         iree_generated.append(tok)
-
-        # Update KV buffers for next step
         kv_buffers = [decode_out[i] for i in range(1, len(decode_out))]
 
         if tok in stop_token_ids:
@@ -451,8 +412,8 @@ print(f"\n--- Summary ---")
 print(f"Eager output : {text}")
 if prefill_mod and decode_mod:
     print(f"IREE  output : {iree_text}")
-print(f"Prefill MLIR : {'OK' if prefill_mlir else 'FAILED'}")
-print(f"Decode  MLIR : {'OK' if decode_mlir else 'FAILED'}")
+print(f"Prefill MLIR : {'OK' if export_ok[0] else 'FAILED'}")
+print(f"Decode  MLIR : {'OK' if export_ok[1] else 'FAILED'}")
 print(f"Prefill IREE : {'OK' if prefill_mod else 'FAILED'}")
 print(f"Decode  IREE : {'OK' if decode_mod else 'FAILED'}")
 
