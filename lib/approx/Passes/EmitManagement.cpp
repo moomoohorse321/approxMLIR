@@ -421,7 +421,7 @@ struct EmitManagementPass : public impl::EmitManagementPassBase<EmitManagementPa
     GreedyRewriteConfig config;
     config.setMaxIterations(10);
     
-    if (failed(applyPatternsAndFoldGreedily(getOperation(), 
+    if (failed(applyPatternsGreedily(getOperation(), 
                                              std::move(patterns), config))) {
       signalPassFailure();
     }

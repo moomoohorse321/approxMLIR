@@ -322,7 +322,7 @@ struct EmitApproxPass : public impl::EmitApproxPassBase<EmitApproxPass> {
     patterns.add<EmitKnobFromKnobAnnotation>(&getContext());
     GreedyRewriteConfig config;
     config.setMaxIterations(1);
-    (void)(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns), config));
+    (void)(applyPatternsGreedily(getOperation(), std::move(patterns), config));
   }
 };
 } // namespace

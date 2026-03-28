@@ -205,7 +205,7 @@ struct PreEmitTransformationPass
     GreedyRewriteConfig config;
     config.setMaxIterations(1);
     patterns.add<PreEmitFuncConversion>(&getContext());
-    (void)(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns), config));
+    (void)(applyPatternsGreedily(getOperation(), std::move(patterns), config));
   }
 };
 } // namespace

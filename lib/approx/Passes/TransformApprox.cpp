@@ -520,7 +520,7 @@ struct TransformApproxPass
     patterns.add<TaskSkipping>(&getContext());
     GreedyRewriteConfig config;
     config.setMaxIterations(1);
-    (void)(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns), config)); // apply the patterns to the operation
+    (void)(applyPatternsGreedily(getOperation(), std::move(patterns), config)); // apply the patterns to the operation
   }
 };
 } // namespace

@@ -145,7 +145,7 @@ struct FinalizeApproxPass : public impl::FinalizeApproxPassBase<FinalizeApproxPa
     GreedyRewriteConfig config;
     config.setMaxIterations(10);
     
-    if (failed(applyPatternsAndFoldGreedily(getOperation(), 
+    if (failed(applyPatternsGreedily(getOperation(), 
                                              std::move(patterns), config))) {
       signalPassFailure();
     }

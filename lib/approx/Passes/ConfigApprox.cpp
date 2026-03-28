@@ -352,7 +352,7 @@ struct ConfigApproxPass : public impl::ConfigApproxPassBase<ConfigApproxPass> {
     patterns.add<ConfigureTry>(&getContext()); 
     GreedyRewriteConfig config;
     config.setMaxIterations(1);
-    (void)(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns), config));
+    (void)(applyPatternsGreedily(getOperation(), std::move(patterns), config));
   }
 };
 } // namespace
