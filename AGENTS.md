@@ -235,6 +235,181 @@ If `runtime/examples/example_triton_wo_tuning.py` fails, check in this order:
 
 Prefer confirming the failure stage with the example script before making broad changes.
 
+## Setup Guide: ApproxMLIR with Triton Support
+
+This section walks through building ApproxMLIR's Triton plugin from scratch. The end goal is running `runtime/examples/example_triton_wo_tuning.py`.
+
+### Prerequisites
+
+| Dependency | Version | Notes |
+|---|---|---|
+| Python | >= 3.9 | 3.10+ recommended |
+| CMake | >= 3.20, < 4.0 | |
+| Ninja | >= 1.11.1 | |
+| C++17 compiler | GCC 11+ or Clang 14+ | |
+| PyTorch | >= 2.0 | Must match your CUDA version. On Jetson, use NVIDIA's pip index |
+| CUDA toolkit | >= 12.0 | For GPU execution |
+
+### Step 1: Clone Triton
+
+```bash
+git clone https://github.com/triton-lang/triton.git
+cd triton
+git checkout 3f0a0085a  # tested commit; newer may work but API may drift
+git submodule update --init --recursive
+```
+
+### Step 2: Create a Python virtual environment
+
+```bash
+python3 -m venv /path/to/envs/triton-dev
+source /path/to/envs/triton-dev/bin/activate
+pip install --upgrade pip setuptools wheel
+pip install pybind11>=2.13.1 ninja cmake
+```
+
+Install PyTorch into the venv:
+
+```bash
+# x86_64 Linux / Mac:
+pip install torch
+
+# Jetson (aarch64, JetPack 6+):
+pip install torch --index-url https://pypi.jetson-ai-lab.dev/jp6/cu126
+```
+
+### Step 3: Build Triton from source with plugin support
+
+Triton must be built with `TRITON_EXT_ENABLED=ON` so that `libtriton.so` exports symbols needed by external plugins. Without this flag, the plugin will fail to load at runtime.
+
+```bash
+# Triton downloads its own LLVM during build. Set a cache directory:
+export TRITON_CACHE_PATH=/path/to/triton-cache
+
+# Option A: pip install (simpler, handles LLVM download automatically)
+cd triton/python
+TRITON_BUILD_WITH_CCACHE=true pip install -e . \
+  --config-settings=cmake.define.TRITON_EXT_ENABLED=ON
+
+# Option B: cmake build (more control, useful for debugging)
+mkdir -p /path/to/build/triton-cmake
+cd /path/to/build/triton-cmake
+
+# Triton bundles a specific LLVM. Download it first:
+python triton/python/setup.py --llvm-download  # or let cmake find it
+# The downloaded LLVM lands at: triton/.triton-home/.triton/llvm/llvm-<hash>-<platform>/
+
+LLVM_SYSPATH=/path/to/triton/.triton-home/.triton/llvm/llvm-7f77ca0d-<platform>
+
+cmake /path/to/triton \
+  -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DLLVM_EXTERNAL_LIT=$(which lit || echo "") \
+  -DTRITON_EXT_ENABLED=ON \
+  -DCMAKE_CXX_FLAGS="-Wno-error=attributes"
+ninja -j$(nproc) triton
+```
+
+> **Jetson note:** Use `ninja -j2` instead of `-j$(nproc)` — the Jetson Orin Nano has limited RAM and will OOM with more parallel jobs.
+
+If you used Option B (cmake), make `triton` importable in Python:
+
+```bash
+# Create a .pth file so Python finds the Triton package
+echo "/path/to/triton/python" > \
+  $(python -c "import site; print(site.getsitepackages()[0])")/triton-dev.pth
+```
+
+Verify Triton is importable:
+
+```bash
+python -c "import triton; print(triton.__version__)"
+```
+
+### Step 4: Clone and build the ApproxMLIR plugin
+
+```bash
+git clone https://github.com/moomoohorse321/approxMLIR.git
+cd approxMLIR
+git submodule update --init --recursive
+```
+
+Triton downloads a pre-built LLVM during its build. The plugin must be built against that same LLVM — not a separately installed one. Find it at:
+
+```bash
+# The hash comes from triton/cmake/llvm-hash.txt
+LLVM_DIR=/path/to/triton/.triton-home/.triton/llvm/llvm-7f77ca0d-<platform>/lib/cmake/llvm
+MLIR_DIR=/path/to/triton/.triton-home/.triton/llvm/llvm-7f77ca0d-<platform>/lib/cmake/mlir
+```
+
+Replace `<platform>` with your system:
+- `ubuntu-x64` for x86_64 Linux
+- `ubuntu-arm64` for aarch64 / Jetson
+- `macos-arm64` for Apple Silicon Mac
+
+Build the plugin:
+
+```bash
+mkdir -p /path/to/build/approx-triton-plugin
+cd /path/to/build/approx-triton-plugin
+
+cmake /path/to/approxMLIR/external-tools/approx-triton-plugin \
+  -G Ninja \
+  -DMLIR_DIR=$MLIR_DIR \
+  -DLLVM_DIR=$LLVM_DIR \
+  -DTRITON_DIR=/path/to/triton \
+  -DTRITON_BUILD_DIR=/path/to/build/triton-cmake \
+  -DAPPROX_MLIR_DIR=/path/to/approxMLIR
+
+ninja -j$(nproc)  # or ninja -j2 on Jetson
+```
+
+Output: `lib/libApproxTritonPlugin.so` (or `.dylib` on Mac).
+
+### Step 5: Install the approx_runtime Python package
+
+```bash
+cd /path/to/approxMLIR/runtime
+pip install -e .
+```
+
+### Step 6: Set environment variables and run
+
+```bash
+# Required: tells Triton where to find the plugin
+export TRITON_PLUGIN_PATHS=/path/to/build/approx-triton-plugin/lib/libApproxTritonPlugin.so
+export TRITON_PASS_PLUGIN_PATH=$TRITON_PLUGIN_PATHS
+
+# Required if Triton was built with cmake (Option B), not pip:
+export TRITON_BACKENDS_IN_TREE=1
+
+# Run the example
+python runtime/examples/example_triton_wo_tuning.py
+```
+
+Expected output:
+
+```
+kernel launch ok
+ttir length: 6270
+substitution active: True
+max|hooked - exact|: ~0.02
+max|hooked - approx_ref|: 0.0
+```
+
+> **Tip:** Add these exports to your venv's `bin/activate` script so you don't need to set them every time.
+
+### Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `Failed to load plugin ... undefined symbol` | Plugin built against wrong LLVM | Rebuild plugin using LLVM from `triton/.triton-home/.triton/llvm/` |
+| `operation being parsed with an unregistered dialect` | `TRITON_EXT_ENABLED` was OFF when building Triton | Rebuild Triton with `-DTRITON_EXT_ENABLED=ON` |
+| `0 active drivers` | cmake-built Triton can't find backends | `export TRITON_BACKENDS_IN_TREE=1` |
+| `No module named 'triton'` | Triton not on Python path | Add a `.pth` file or `pip install -e python` |
+| OOM during build on Jetson | Too many parallel compile jobs | Use `ninja -j2` |
+| `libcudss.so.0: cannot open` (Jetson) | PyTorch needs libcudss at non-standard path | `export LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/libcudss/12:$LD_LIBRARY_PATH` |
+
 ## Files Worth Reading First
 
 For general ApproxMLIR understanding:

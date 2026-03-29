@@ -26,29 +26,13 @@
 #include "triton/Tools/PluginUtils.h"
 #include "llvm/Config/llvm-config.h"
 
+using namespace mlir::triton;
+
 // ---------------------------------------------------------------------------
-// Triton plugin entry points
-//
-// Triton's pass plugin loader calls these three C functions (defined in
-// triton/Tools/PluginUtils.h) from the shared library:
-//   - tritonRegisterPluginPass(passName)
-//   - tritonAddPluginPass(pm, passName)
-//   - tritonEnumeratePluginPasses(count, names)
+// Pass creation helper
 // ---------------------------------------------------------------------------
 
 namespace {
-
-/// Pass name constants — these are the names users reference when adding
-/// passes to Triton's pipeline.
-constexpr const char *kPassNames[] = {
-    "emit-approx",
-    "emit-management",
-    "config-approx",
-    "pre-emit-transform",
-    "transform-approx",
-    "finalize-approx",
-};
-constexpr uint32_t kNumPasses = sizeof(kPassNames) / sizeof(kPassNames[0]);
 
 std::unique_ptr<mlir::Pass> createPassByName(const char *name) {
   llvm::StringRef n(name);
@@ -70,57 +54,67 @@ std::unique_ptr<mlir::Pass> createPassByName(const char *name) {
 } // namespace
 
 // ---------------------------------------------------------------------------
-// Plugin API (exported as C symbols from the shared library)
+// Callback functions for each pass
 // ---------------------------------------------------------------------------
 
-TRITON_PLUGIN_API
-tritonRegisterPluginPass(const char *passName) {
-  auto pass = createPassByName(passName);
-  if (!pass)
-    return TP_GENERIC_FAILURE;
-  // Register the pass so it can be found by name in the pipeline.
-  mlir::registerPass([passName]() { return createPassByName(passName); });
-  return TP_SUCCESS;
-}
-
-TRITON_PLUGIN_API
-tritonAddPluginPass(mlir::PassManager *pm, const char *passName) {
-  auto pass = createPassByName(passName);
-  if (!pass)
-    return TP_GENERIC_FAILURE;
-  pm->addPass(std::move(pass));
-  return TP_SUCCESS;
-}
-
-TRITON_PLUGIN_API
-tritonEnumeratePluginPasses(uint32_t *passCount, const char **passNames) {
-  if (!passCount)
-    return TP_GENERIC_FAILURE;
-  *passCount = kNumPasses;
-  if (passNames) {
-    for (uint32_t i = 0; i < kNumPasses; ++i)
-      passNames[i] = kPassNames[i];
+#define DEFINE_PASS_CALLBACKS(funcName, passName)                               \
+  static void add_##funcName(mlir::PassManager *pm,                            \
+                             const std::vector<std::string> &) {               \
+    pm->addPass(createPassByName(passName));                                    \
+  }                                                                            \
+  static void register_##funcName() {                                          \
+    mlir::registerPass([]() { return createPassByName(passName); });           \
   }
-  return TP_SUCCESS;
+
+DEFINE_PASS_CALLBACKS(emit_approx,      "emit-approx")
+DEFINE_PASS_CALLBACKS(emit_management,  "emit-management")
+DEFINE_PASS_CALLBACKS(config_approx,    "config-approx")
+DEFINE_PASS_CALLBACKS(pre_emit_transform, "pre-emit-transform")
+DEFINE_PASS_CALLBACKS(transform_approx, "transform-approx")
+DEFINE_PASS_CALLBACKS(finalize_approx,  "finalize-approx")
+
+#undef DEFINE_PASS_CALLBACKS
+
+// ---------------------------------------------------------------------------
+// Dialect registration callback
+// ---------------------------------------------------------------------------
+
+static void registerApproxDialect(mlir::DialectRegistry *registry) {
+  registry->insert<mlir::approx::approxDialect>();
+  mlir::func::registerInlinerExtension(*registry);
 }
 
-TRITON_PLUGIN_API
-tritonEnumeratePluginDialects(uint32_t *dialectCount,
-                              const char **dialectNames) {
-  if (!dialectCount)
-    return TP_GENERIC_FAILURE;
-  *dialectCount = 1;
-  if (!dialectNames)
-    return TP_SUCCESS;
-  dialectNames[0] = "approx";
-  return TP_SUCCESS;
-}
+// ---------------------------------------------------------------------------
+// Plugin entry point (new Triton PluginInfo API)
+// ---------------------------------------------------------------------------
 
-TRITON_PLUGIN_API_TYPE(::mlir::DialectPluginLibraryInfo)
-tritonGetDialectPluginInfo(const char * /*name*/) {
-  return {MLIR_PLUGIN_API_VERSION, "ApproxPlugin", LLVM_VERSION_STRING,
-          [](mlir::DialectRegistry *registry) {
-            registry->insert<mlir::approx::approxDialect>();
-            mlir::func::registerInlinerExtension(*registry);
-          }};
+static const char *PLUGIN_NAME = "ApproxPlugin";
+static const char *VERSION = "0.1.0";
+
+TRITON_PLUGIN_API plugin::PluginInfo *tritonGetPluginInfo() {
+  static plugin::PassInfo passes[] = {
+      {"emit-approx",       VERSION, add_emit_approx,       register_emit_approx},
+      {"emit-management",   VERSION, add_emit_management,   register_emit_management},
+      {"config-approx",     VERSION, add_config_approx,     register_config_approx},
+      {"pre-emit-transform", VERSION, add_pre_emit_transform, register_pre_emit_transform},
+      {"transform-approx",  VERSION, add_transform_approx,  register_transform_approx},
+      {"finalize-approx",   VERSION, add_finalize_approx,   register_finalize_approx},
+  };
+
+  static plugin::DialectInfo dialects[] = {
+      {"approx", VERSION, registerApproxDialect},
+  };
+
+  static plugin::PluginInfo info = {
+      TRITON_PLUGIN_API_VERSION,
+      PLUGIN_NAME,
+      VERSION,
+      passes,
+      sizeof(passes) / sizeof(passes[0]),
+      dialects,
+      sizeof(dialects) / sizeof(dialects[0]),
+      nullptr, // no custom ops
+      0,
+  };
+  return &info;
 }

@@ -49,6 +49,7 @@ target_link_libraries(ApproxTritonPlugin PRIVATE
     ${LLVM_LIB_DIR}/libMLIRQuantUtils.a
     ${LLVM_LIB_DIR}/libMLIRComplexDialect.a
     ${LLVM_LIB_DIR}/libMLIRFuncInlinerExtension.a
+    ${LLVM_LIB_DIR}/libMLIRPass.a
     ${LLVM_LIB_DIR}/libMLIRIR.a
     ${LLVM_LIB_DIR}/libMLIRDialect.a
     -Wl,--end-group
