@@ -59,7 +59,9 @@ clang -fplugin=ClangEnzyme-22.so -mllvm -raising-plugin-path=libRaise.so \
 | Enzyme plugin | `EnzymeAD/Reactant` (enzyme/) | CMake | `ClangEnzyme-XX.so` |
 | Raising plugin | `EnzymeAD/Enzyme-JaX` | Bazel | `libRaise.so` |
 
-`ClangEnzyme` intercepts compilation; `libRaise.so` performs the "raising" (LLVM IR -> high-level MLIR) that cgeist used to do. See the Reactant C++ install doc (provided separately) for build instructions.
+`ClangEnzyme` intercepts compilation; `libRaise.so` performs the "raising" (LLVM IR -> high-level MLIR) that cgeist used to do. See the Reactant C++ install doc here for build instructions:
+
+https://docs.google.com/document/d/1Iehqk6bWgc62m64fCin-3KhPq_uGcP4HqbniWln0qdg/edit?tab=t.0
 
 ---
 
@@ -107,7 +109,7 @@ clang -fplugin=ClangEnzyme-22.so -mllvm -raising-plugin-path=libRaise.so \
 
 ## Resources
 
-- Reactant C++ install doc (provided separately)
+- Reactant C++ install doc: https://docs.google.com/document/d/1Iehqk6bWgc62m64fCin-3KhPq_uGcP4HqbniWln0qdg/edit?tab=t.0
 - Reactant repo: https://github.com/EnzymeAD/Reactant
 - Enzyme-JaX repo: https://github.com/EnzymeAD/Enzyme-JaX
 - Example usage: https://github.com/wsmoses/Enzyme-GPU-Tests/pull/2
