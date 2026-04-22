@@ -23,7 +23,7 @@ if(NOT TRITON_DIR)
   message(FATAL_ERROR "Set -DTRITON_DIR=/path/to/triton")
 endif()
 include_directories(${TRITON_DIR}/include)
-include_directories(${TRITON_DIR})          # for python/src/ir.h referenced by PluginUtils.h
+include_directories(${TRITON_DIR})
 if(TRITON_BUILD_DIR)
   include_directories(${TRITON_BUILD_DIR}/include) # generated headers
 endif()

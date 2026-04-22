@@ -22,17 +22,22 @@
 #include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
-#include "mlir/Tools/Plugins/DialectPlugin.h"
 #include "triton/Tools/PluginUtils.h"
 #include "llvm/Config/llvm-config.h"
 
-using namespace mlir::triton;
-
-// ---------------------------------------------------------------------------
-// Pass creation helper
-// ---------------------------------------------------------------------------
-
 namespace {
+
+/// Pass name constants — these are the names users reference when adding
+/// passes to Triton's pipeline.
+constexpr const char *kPassNames[] = {
+    "emit-approx",
+    "emit-management",
+    "config-approx",
+    "pre-emit-transform",
+    "transform-approx",
+    "finalize-approx",
+};
+constexpr uint32_t kNumPasses = sizeof(kPassNames) / sizeof(kPassNames[0]);
 
 std::unique_ptr<mlir::Pass> createPassByName(const char *name) {
   llvm::StringRef n(name);
@@ -51,70 +56,92 @@ std::unique_ptr<mlir::Pass> createPassByName(const char *name) {
   return nullptr;
 }
 
-} // namespace
+void addPassByName(mlir::PassManager *pm, const std::vector<std::string> &args,
+                   const char *name) {
+  (void)args;
+  if (auto pass = createPassByName(name))
+    pm->addPass(std::move(pass));
+}
 
-// ---------------------------------------------------------------------------
-// Callback functions for each pass
-// ---------------------------------------------------------------------------
+void registerPassByName(const char *name) {
+  mlir::registerPass([name]() { return createPassByName(name); });
+}
 
-#define DEFINE_PASS_CALLBACKS(funcName, passName)                               \
-  static void add_##funcName(mlir::PassManager *pm,                            \
-                             const std::vector<std::string> &) {               \
-    pm->addPass(createPassByName(passName));                                    \
-  }                                                                            \
-  static void register_##funcName() {                                          \
-    mlir::registerPass([]() { return createPassByName(passName); });           \
-  }
-
-DEFINE_PASS_CALLBACKS(emit_approx,      "emit-approx")
-DEFINE_PASS_CALLBACKS(emit_management,  "emit-management")
-DEFINE_PASS_CALLBACKS(config_approx,    "config-approx")
-DEFINE_PASS_CALLBACKS(pre_emit_transform, "pre-emit-transform")
-DEFINE_PASS_CALLBACKS(transform_approx, "transform-approx")
-DEFINE_PASS_CALLBACKS(finalize_approx,  "finalize-approx")
-
-#undef DEFINE_PASS_CALLBACKS
-
-// ---------------------------------------------------------------------------
-// Dialect registration callback
-// ---------------------------------------------------------------------------
-
-static void registerApproxDialect(mlir::DialectRegistry *registry) {
+void registerApproxDialect(mlir::DialectRegistry *registry) {
   registry->insert<mlir::approx::approxDialect>();
   mlir::func::registerInlinerExtension(*registry);
 }
 
-// ---------------------------------------------------------------------------
-// Plugin entry point (new Triton PluginInfo API)
-// ---------------------------------------------------------------------------
+void addEmitApproxPass(mlir::PassManager *pm,
+                       const std::vector<std::string> &args) {
+  addPassByName(pm, args, "emit-approx");
+}
 
-static const char *PLUGIN_NAME = "ApproxPlugin";
-static const char *VERSION = "0.1.0";
+void addEmitManagementPass(mlir::PassManager *pm,
+                           const std::vector<std::string> &args) {
+  addPassByName(pm, args, "emit-management");
+}
 
-TRITON_PLUGIN_API plugin::PluginInfo *tritonGetPluginInfo() {
-  static plugin::PassInfo passes[] = {
-      {"emit-approx",       VERSION, add_emit_approx,       register_emit_approx},
-      {"emit-management",   VERSION, add_emit_management,   register_emit_management},
-      {"config-approx",     VERSION, add_config_approx,     register_config_approx},
-      {"pre-emit-transform", VERSION, add_pre_emit_transform, register_pre_emit_transform},
-      {"transform-approx",  VERSION, add_transform_approx,  register_transform_approx},
-      {"finalize-approx",   VERSION, add_finalize_approx,   register_finalize_approx},
+void addConfigApproxPass(mlir::PassManager *pm,
+                         const std::vector<std::string> &args) {
+  addPassByName(pm, args, "config-approx");
+}
+
+void addPreEmitTransformPass(mlir::PassManager *pm,
+                             const std::vector<std::string> &args) {
+  addPassByName(pm, args, "pre-emit-transform");
+}
+
+void addTransformApproxPass(mlir::PassManager *pm,
+                            const std::vector<std::string> &args) {
+  addPassByName(pm, args, "transform-approx");
+}
+
+void addFinalizeApproxPass(mlir::PassManager *pm,
+                           const std::vector<std::string> &args) {
+  addPassByName(pm, args, "finalize-approx");
+}
+
+void registerEmitApproxPass() { registerPassByName("emit-approx"); }
+void registerEmitManagementPass() { registerPassByName("emit-management"); }
+void registerConfigApproxPass() { registerPassByName("config-approx"); }
+void registerPreEmitTransformPass() {
+  registerPassByName("pre-emit-transform");
+}
+void registerTransformApproxPass() { registerPassByName("transform-approx"); }
+void registerFinalizeApproxPass() { registerPassByName("finalize-approx"); }
+
+} // namespace
+
+TRITON_PLUGIN_API mlir::triton::plugin::PluginInfo *tritonGetPluginInfo() {
+  static mlir::triton::plugin::PassInfo passes[] = {
+      {"emit-approx", LLVM_VERSION_STRING, addEmitApproxPass,
+       registerEmitApproxPass},
+      {"emit-management", LLVM_VERSION_STRING, addEmitManagementPass,
+       registerEmitManagementPass},
+      {"config-approx", LLVM_VERSION_STRING, addConfigApproxPass,
+       registerConfigApproxPass},
+      {"pre-emit-transform", LLVM_VERSION_STRING, addPreEmitTransformPass,
+       registerPreEmitTransformPass},
+      {"transform-approx", LLVM_VERSION_STRING, addTransformApproxPass,
+       registerTransformApproxPass},
+      {"finalize-approx", LLVM_VERSION_STRING, addFinalizeApproxPass,
+       registerFinalizeApproxPass},
   };
-
-  static plugin::DialectInfo dialects[] = {
-      {"approx", VERSION, registerApproxDialect},
+  static mlir::triton::plugin::DialectInfo dialects[] = {
+      {"approx", LLVM_VERSION_STRING, registerApproxDialect},
   };
-
-  static plugin::PluginInfo info = {
+  static mlir::triton::plugin::PluginInfo info = {
       TRITON_PLUGIN_API_VERSION,
-      PLUGIN_NAME,
-      VERSION,
+      "ApproxPlugin",
+      LLVM_VERSION_STRING,
       passes,
-      sizeof(passes) / sizeof(passes[0]),
+      kNumPasses,
       dialects,
-      sizeof(dialects) / sizeof(dialects[0]),
-      nullptr, // no custom ops
+      1,
+      nullptr,
       0,
+      TRITON_VERSION,
   };
   return &info;
 }
