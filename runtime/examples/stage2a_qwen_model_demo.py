@@ -29,11 +29,6 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SOURCE_TRITON_PYTHON = _REPO_ROOT / "triton" / "python"
 if str(_SOURCE_TRITON_PYTHON) not in sys.path:
     sys.path.insert(0, str(_SOURCE_TRITON_PYTHON))
-_INITIAL_PLUGIN = os.environ.get("TRITON_PASS_PLUGIN_PATH")
-if _INITIAL_PLUGIN:
-    _PLUGIN_PATHS = [p for p in os.environ.get("TRITON_PLUGIN_PATHS", "").split(":") if p]
-    if _INITIAL_PLUGIN not in _PLUGIN_PATHS:
-        os.environ["TRITON_PLUGIN_PATHS"] = ":".join([_INITIAL_PLUGIN] + _PLUGIN_PATHS)
 os.environ.setdefault("TORCHINDUCTOR_COMPILE_THREADS", "1")
 os.environ.setdefault("TORCHINDUCTOR_WORKER_START", "fork")
 
@@ -64,12 +59,6 @@ def _prepend_plugin_env(plugin: str) -> None:
 def _configure_inductor_env() -> None:
     if os.environ.get("QWEN_INDUCTOR_ALLOW_UNSPEC_INT", "1") == "1":
         torch._dynamo.config.allow_unspec_int_on_nn_module = True
-    limit = int(os.environ.get("QWEN_DYNAMO_RECOMPILE_LIMIT", "64"))
-    torch._dynamo.config.recompile_limit = max(torch._dynamo.config.recompile_limit, limit)
-    torch._dynamo.config.accumulated_recompile_limit = max(
-        torch._dynamo.config.accumulated_recompile_limit,
-        limit * 4,
-    )
 
 
 def _compile_module(module: nn.Module) -> nn.Module:
@@ -81,25 +70,6 @@ def _compile_module(module: nn.Module) -> nn.Module:
     return torch.compile(module, **kwargs)
 
 
-def _iter_decoder_layers(model: nn.Module) -> Iterable[nn.Module]:
-    text_model = getattr(model, "model", None)
-    text_model = getattr(text_model, "language_model", text_model)
-    layers = getattr(text_model, "layers", None)
-    if layers is None:
-        return []
-    return list(layers)
-
-
-def _compile_bound_forward(forward_fn, idx: int):
-    namespace = {"_orig_forward": forward_fn}
-    exec(
-        f"def _approx_layer_forward_{idx}(*args, **kwargs):\n"
-        "    return _orig_forward(*args, **kwargs)\n",
-        namespace,
-    )
-    return _compile_module(namespace[f"_approx_layer_forward_{idx}"])
-
-
 def _maybe_compile_model(model: nn.Module, scope: str, wrappers: list[nn.Module]) -> nn.Module:
     if scope == "none":
         return model
@@ -109,39 +79,21 @@ def _maybe_compile_model(model: nn.Module, scope: str, wrappers: list[nn.Module]
             compiled = _compile_module(wrapper)
             wrapper.forward = compiled.forward
         return model
-    if scope == "layers":
-        for idx, layer in enumerate(_iter_decoder_layers(model)):
-            layer.forward = _compile_bound_forward(layer.forward, idx)
-        return model
-    if scope == "target_layers":
-        layers = _iter_decoder_layers(model)
-        target_indices = sorted(
-            {
-                idx
-                for wrapper in wrappers
-                for idx in [getattr(wrapper, "_approx_layer_idx", None)]
-                if idx is not None and idx < len(layers)
-            }
-        )
-        for idx in target_indices:
-            layers[idx].forward = _compile_bound_forward(layers[idx].forward, idx)
-        return model
     if scope == "model":
         model.forward = _compile_module(model.forward)
         return model
-    raise RuntimeError("QWEN_INDUCTOR_SCOPE must be one of: none, patched, target_layers, layers, model")
+    raise RuntimeError("QWEN_INDUCTOR_SCOPE must be one of: none, patched, model")
     return model
 
 
 def _force_stable_qwen3_5_linear_attn_mask(model: nn.Module) -> None:
     text_model = getattr(model, "model", None)
-    text_model = getattr(text_model, "language_model", text_model)
-    if not hasattr(text_model, "_update_linear_attn_mask"):
+    updater = getattr(text_model, "_update_linear_attn_mask", None)
+    if updater is None:
         return
 
-    def _stable_update_linear_attn_mask(_attention_mask, _past_key_values):
-        # Batch-1 text decode has no padding, so avoid a 2D mask on linear layers.
-        return None
+    def _stable_update_linear_attn_mask(attention_mask, past_key_values):
+        return attention_mask
 
     text_model._update_linear_attn_mask = _stable_update_linear_attn_mask
 
@@ -263,7 +215,6 @@ class TritonDecodeLinear(nn.Module):
         self.weight_layout = self.quantized_weight.original_weight_tensor.layout
         self.weight_group_size_runtime = self.quantized_weight.original_weight_tensor.group_size
 
-    @torch._dynamo.disable
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         self.last_input_dtype = x.dtype
         if not x.is_cuda or x.dtype not in (torch.float16, torch.bfloat16):
@@ -379,7 +330,6 @@ class TritonFusedGateUpMLP(nn.Module):
         self.gate.finalize_approx()
         self.up.finalize_approx()
 
-    @torch._dynamo.disable
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if not x.is_cuda or x.dtype not in (torch.float16, torch.bfloat16):
             return self.original(x)
@@ -504,14 +454,12 @@ def _build_hook(
     activation_dtype: torch.dtype,
     *,
     fused_gate_up: bool = False,
-    grouped_weights: bool = False,
 ):
     import approx_runtime as ar
     sys.path.insert(0, str(Path(__file__).parent))
     from kernels.quant_kernels import (
         approx_int8_dual_dequant_matmul_kernel_1,
         approx_int8_dequant_matmul_kernel_1,
-        approx_int8_matmul_kernel_1,
     )
 
     a = torch.randint(-127, 128, (1, 2048), device="cuda", dtype=torch.int8)
@@ -528,17 +476,6 @@ def _build_hook(
             a.stride(0), a.stride(1),
             b.stride(0), b.stride(1),
             c.stride(0), c.stride(1),
-            BLOCK_M=64, BLOCK_N=64, BLOCK_K=32,
-        )
-    elif grouped_weights:
-        func_name = "int8_matmul_kernel"
-        approx_kernel = approx_int8_matmul_kernel_1
-        c_i32 = torch.empty((1, 6144), device="cuda", dtype=torch.int32)
-        approx_handle = approx_kernel[(1, 96)](
-            a, b, c_i32, 1, 6144, 2048,
-            a.stride(0), a.stride(1),
-            b.stride(0), b.stride(1),
-            c_i32.stride(0), c_i32.stride(1),
             BLOCK_M=64, BLOCK_N=64, BLOCK_K=32,
         )
     else:
@@ -806,7 +743,6 @@ def main() -> int:
         for layer_idx in sorted({layer_idx for layer_idx, *_ in targets}):
             fused = TritonFusedGateUpMLP(model.model.layers[layer_idx].mlp, group_size)
             fused.to("cuda")
-            fused._approx_layer_idx = layer_idx
             model.model.layers[layer_idx].mlp = fused
             wrappers.append(fused)
             patched_names.append(f"{layer_idx}.mlp(gate_up_fused)")
@@ -817,7 +753,6 @@ def main() -> int:
             continue
         wrapper = TritonDecodeLinear(linear, group_size)
         wrapper.to("cuda")
-        wrapper._approx_layer_idx = layer_idx
         wrapper.finalize_approx()
         setattr(parent, name, wrapper)
         wrappers.append(wrapper)
@@ -848,15 +783,10 @@ def main() -> int:
     exact_profile_counts = dict(TritonDecodeLinear._profile_counts)
 
     hook_activation_dtype = wrappers[0].last_input_dtype if wrappers else torch.float16
-    grouped_weights = any(
-        isinstance(wrapper, TritonDecodeLinear) and wrapper.weight_layout == "per_group_int8"
-        for wrapper in wrappers
-    )
     hook = _build_hook(
         plugin,
         activation_dtype=hook_activation_dtype,
         fused_gate_up=fuse_gate_up and patch_set == {"gate_proj", "up_proj"},
-        grouped_weights=grouped_weights,
     ) if use_substitute else None
     for wrapper in wrappers:
         wrapper.mode = "approx"
