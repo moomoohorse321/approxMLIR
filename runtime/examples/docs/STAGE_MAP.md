@@ -43,10 +43,6 @@ than the mainline implementation.
   - microbenchmark for real bad-case shapes
   - used to verify whether a kernel reaches true INT8 compute
 
-- `sidepaths/stage2a_func_substitute_demo.py`
-  - minimal isolated substitute-path demo
-  - useful when debugging the Triton hook without the full Qwen model
-
 - `sidepaths/dump_qwen_ttir.py`
   - Stage 1 observation tool for Qwen TTIR
 

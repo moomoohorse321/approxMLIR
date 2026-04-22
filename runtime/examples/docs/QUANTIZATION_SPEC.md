@@ -52,7 +52,6 @@ The following files are support or investigation tools:
 
 - `runtime/examples/sidepaths/stage2a_regime_characterizer.py`
 - `runtime/examples/sidepaths/stage2a_fastpath_probe.py`
-- `runtime/examples/sidepaths/stage2a_func_substitute_demo.py`
 - `runtime/examples/sidepaths/dump_qwen_ttir.py`
 - `runtime/examples/sidepaths/dump_triton_kernels.py`
 
@@ -82,8 +81,6 @@ The minimal current file set for quantization work is:
 - `runtime/examples/sidepaths/stage2a_fastpath_probe.py`
   - microbenchmark to confirm whether a real bad-case shape is on a true INT8
     fast path
-- `runtime/examples/sidepaths/stage2a_func_substitute_demo.py`
-  - minimal function-substitution demo path
 - `runtime/examples/sidepaths/dump_triton_kernels.py`
   - direct Triton kernel dump harness
 - `runtime/examples/sidepaths/dump_qwen_ttir.py`
@@ -117,7 +114,6 @@ Main APIs:
 
 Current quantization configs:
 
-- `ApproxInt8WeightOnlyConfig`
 - `ApproxInt8DynamicActivationInt8WeightConfig`
 
 This layer is the first step toward a torchao-like boundary: quantization is
@@ -139,12 +135,7 @@ Execution modes:
 
 - `exact`
   - keep original floating-point path
-- `packed_dequant`
-  - pre-pack weights offline
-  - unpack and dequantize inside the substitute kernel
-  - useful as a weight-compression experiment
-  - not a true low-bit compute path
-- `fast_int8`
+- `dynamic_int8`
   - pre-quantize weights to INT8
   - quantize activations online with a fused Triton activation quant kernel
   - run INT8 matmul / INT8+dequant matmul kernels
@@ -168,26 +159,13 @@ Current substitute kernels in `quant_kernels.py` include:
 - `approx_int8_matmul_kernel_1`
 - `approx_int8_dequant_matmul_kernel_1`
 - `approx_int8_dual_dequant_matmul_kernel_1`
-- legacy `approx_matmul_kernel_1`
 
 ## What Is Actually On The Fast Path
 
-Current important distinction:
-
-- `packed_dequant`
-  - saves weight storage / bandwidth
-  - but the heavy op falls back to floating-point MMA
-  - this is not the main path for speed
-- `fast_int8`
-  - the heavy op is intentionally driven toward true INT8 MMA
-  - `stage2a_fastpath_probe.py` is the probe that confirms this on real bad
-    shapes
-
-So the current practical direction is:
-
-- use `fast_int8` for real speed experiments
-- treat `packed_dequant` as a reference weight-compression path, not the main
-  performance path
+The only retained approximate execution path is dynamic activation INT8 +
+pre-quantized INT8 weights. The heavy op is intentionally driven toward true
+INT8 MMA, and `stage2a_fastpath_probe.py` is the probe that confirms this on
+real decode shapes.
 
 ## Current Inductor Status
 
@@ -234,7 +212,7 @@ The current real positive result on the 2B line is:
 - `Qwen3.5-2B`
 - `out_proj`
 - `last4`
-- `fast_int8`
+- `dynamic_int8`
 - `substitution=1`
 - `Inductor=model`
 - `StaticCache=1`

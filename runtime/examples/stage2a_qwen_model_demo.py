@@ -12,7 +12,6 @@ Env:
 - QWEN_PROMPT: default short prompt
 - QWEN_DECODE_STEPS: default 8
 - APPROX_GROUP_SIZE: default 128
-- APPROX_BITS: 8 or 4
 - QWEN_PATCH: comma-separated set from
   q_proj,k_proj,v_proj,o_proj,in_proj_qkv,out_proj,gate_proj,up_proj,down_proj
 - QWEN_LAYERS: "all" or comma-separated layer indices
@@ -184,14 +183,12 @@ class TritonDecodeLinear(nn.Module):
         cls._record_ms(key, start.elapsed_time(end))
         return out
 
-    def __init__(self, linear: nn.Linear, group_size_k: int, quant_bits: int, approx_impl: str):
+    def __init__(self, linear: nn.Linear, group_size_k: int):
         super().__init__()
         self.original = linear
         self.in_features = linear.in_features
         self.out_features = linear.out_features
         self.group_size_k = group_size_k
-        self.quant_bits = quant_bits
-        self.approx_impl = approx_impl
         self.last_input_dtype = linear.weight.dtype
         self.mode = "exact"
         self.decode_only = True
@@ -199,7 +196,6 @@ class TritonDecodeLinear(nn.Module):
 
         weight_t = linear.weight.detach().t().contiguous()
         self.register_buffer("weight_t_exact", weight_t)
-        self.register_buffer("weight_t_packed", torch.empty(0, dtype=torch.float16))
         self.register_buffer("weight_t_i8", torch.empty(0, dtype=torch.int8))
         self.register_buffer("weight_t_i8_scale", torch.empty(0, dtype=torch.float32))
         self.weight_layout = ""
@@ -210,19 +206,14 @@ class TritonDecodeLinear(nn.Module):
         else:
             self.register_buffer("bias", linear.bias.detach().contiguous().to(dtype=torch.float16))
 
-    def finalize_approx(self, pack_fn, quant_b_fn) -> None:
-        if self.approx_impl == "packed_dequant":
-            self.weight_t_packed = pack_fn(self.weight_t_exact, self.group_size_k, self.quant_bits)
-        elif self.approx_impl == "fast_int8":
-            self.quantized_weight = getattr(self.original, "_approx_quantized_weight", None)
-            if not isinstance(self.quantized_weight, ApproxLinearActivationQuantizedTensor):
-                raise RuntimeError("fast_int8 expected activation-aware quantized weight")
-            self.weight_t_i8 = self.quantized_weight.original_weight_tensor.qdata
-            self.weight_t_i8_scale = self.quantized_weight.original_weight_tensor.scale
-            self.weight_layout = self.quantized_weight.original_weight_tensor.layout
-            self.weight_group_size_runtime = self.quantized_weight.original_weight_tensor.group_size
-        else:
-            raise RuntimeError(f"Unknown approx impl: {self.approx_impl}")
+    def finalize_approx(self) -> None:
+        self.quantized_weight = getattr(self.original, "_approx_quantized_weight", None)
+        if not isinstance(self.quantized_weight, ApproxLinearActivationQuantizedTensor):
+            raise RuntimeError("expected activation-aware quantized weight")
+        self.weight_t_i8 = self.quantized_weight.original_weight_tensor.qdata
+        self.weight_t_i8_scale = self.quantized_weight.original_weight_tensor.scale
+        self.weight_layout = self.quantized_weight.original_weight_tensor.layout
+        self.weight_group_size_runtime = self.quantized_weight.original_weight_tensor.group_size
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         self.last_input_dtype = x.dtype
@@ -233,7 +224,7 @@ class TritonDecodeLinear(nn.Module):
             return self.original(x)
 
         sys.path.insert(0, str(Path(__file__).parent))
-        from kernels.llm_like import exact_matmul_kernel, matmul_kernel
+        from kernels.llm_like import exact_matmul_kernel
         from kernels.quant_kernels import int8_dequant_matmul_kernel, int8_matmul_kernel
 
         import triton
@@ -254,29 +245,13 @@ class TritonDecodeLinear(nn.Module):
                     BLOCK_M=64, BLOCK_N=64, BLOCK_K=32,
                 ),
             )
-        elif self.approx_impl == "packed_dequant":
-            b = self.weight_t_packed
-            stride_bk, stride_bn = self.group_size_k, self.quant_bits
-            handle = self._measure_cuda_ms(
-                "packed_dequant_mm_ms",
-                lambda: matmul_kernel[grid](
-                    x_2d, b, out,
-                    x_2d.shape[0], self.out_features, self.in_features,
-                    x_2d.stride(0), x_2d.stride(1),
-                    stride_bk, stride_bn,
-                    out.stride(0), out.stride(1),
-                    BLOCK_M=64, BLOCK_N=64, BLOCK_K=32,
-                ),
-            )
-            if "approx_matmul_kernel_1" in handle.asm.get("ttir", ""):
-                self.substitution_hits += 1
         else:
             cls = type(self)
             cache_key = (cls._step_id, x_2d.data_ptr(), tuple(x_2d.shape), x_2d.dtype)
             cached = cls._quant_cache.get(cache_key)
             if cached is None:
                 if not isinstance(self.quantized_weight, ApproxLinearActivationQuantizedTensor):
-                    raise RuntimeError("fast_int8 expected ApproxLinearActivationQuantizedTensor")
+                    raise RuntimeError("expected ApproxLinearActivationQuantizedTensor")
                 cached = self._measure_cuda_ms(
                     "fast_int8_actq_ms",
                     lambda: self.quantized_weight.input_quant_func(x_2d),
@@ -346,14 +321,14 @@ class TritonFusedGateUpMLP(nn.Module):
         self.substitution_hits = 0
         self.decode_only = True
 
-        self.gate = TritonDecodeLinear(mlp.gate_proj, group_size_k, 8, "fast_int8")
-        self.up = TritonDecodeLinear(mlp.up_proj, group_size_k, 8, "fast_int8")
-        self.down_exact = TritonDecodeLinear(mlp.down_proj, group_size_k, 8, "packed_dequant")
+        self.gate = TritonDecodeLinear(mlp.gate_proj, group_size_k)
+        self.up = TritonDecodeLinear(mlp.up_proj, group_size_k)
+        self.down_exact = TritonDecodeLinear(mlp.down_proj, group_size_k)
         self.gate.to("cuda")
         self.up.to("cuda")
         self.down_exact.to("cuda")
-        self.gate.finalize_approx(None, None)
-        self.up.finalize_approx(None, None)
+        self.gate.finalize_approx()
+        self.up.finalize_approx()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if not x.is_cuda or x.dtype not in (torch.float16, torch.bfloat16):
@@ -477,60 +452,42 @@ def _resolve_layer_filter(layers_spec: str, num_layers: int) -> set[int] | None:
 def _build_hook(
     plugin: str,
     activation_dtype: torch.dtype,
-    approx_impl: str,
     *,
     fused_gate_up: bool = False,
 ):
     import approx_runtime as ar
     sys.path.insert(0, str(Path(__file__).parent))
-    from kernels.llm_like import matmul_kernel
     from kernels.quant_kernels import (
         approx_int8_dual_dequant_matmul_kernel_1,
         approx_int8_dequant_matmul_kernel_1,
-        approx_int8_matmul_kernel_1,
-        approx_matmul_kernel_1,
     )
 
-    if approx_impl == "packed_dequant":
-        func_name = "matmul_kernel"
-        approx_kernel = approx_matmul_kernel_1
-        a = torch.randn((1, 896), device="cuda", dtype=activation_dtype)
-        b = torch.randn((896, 896), device="cuda", dtype=torch.float16)
-        c = torch.empty((1, 896), device="cuda", dtype=activation_dtype)
-        approx_handle = approx_kernel[(1, 14)](
-            a, b, c, 1, 896, 896,
+    a = torch.randint(-127, 128, (1, 2048), device="cuda", dtype=torch.int8)
+    b = torch.randint(-127, 128, (2048, 6144), device="cuda", dtype=torch.int8)
+    a_scale = torch.ones((1,), device="cuda", dtype=torch.float32)
+    b_scale = torch.ones((6144,), device="cuda", dtype=torch.float32)
+    c = torch.empty((1, 6144), device="cuda", dtype=activation_dtype)
+    if fused_gate_up:
+        func_name = "int8_dual_dequant_matmul_kernel"
+        approx_kernel = approx_int8_dual_dequant_matmul_kernel_1
+        c2 = torch.empty_like(c)
+        approx_handle = approx_kernel[(1, 96)](
+            a, b, b, a_scale, b_scale, b_scale, c, c2, 1, 6144, 2048,
             a.stride(0), a.stride(1),
-            128, 0,
+            b.stride(0), b.stride(1),
             c.stride(0), c.stride(1),
             BLOCK_M=64, BLOCK_N=64, BLOCK_K=32,
         )
     else:
-        a = torch.randint(-127, 128, (1, 2048), device="cuda", dtype=torch.int8)
-        b = torch.randint(-127, 128, (2048, 6144), device="cuda", dtype=torch.int8)
-        a_scale = torch.ones((1,), device="cuda", dtype=torch.float32)
-        b_scale = torch.ones((6144,), device="cuda", dtype=torch.float32)
-        c = torch.empty((1, 6144), device="cuda", dtype=activation_dtype)
-        if fused_gate_up:
-            func_name = "int8_dual_dequant_matmul_kernel"
-            approx_kernel = approx_int8_dual_dequant_matmul_kernel_1
-            c2 = torch.empty_like(c)
-            approx_handle = approx_kernel[(1, 96)](
-                a, b, b, a_scale, b_scale, b_scale, c, c2, 1, 6144, 2048,
-                a.stride(0), a.stride(1),
-                b.stride(0), b.stride(1),
-                c.stride(0), c.stride(1),
-                BLOCK_M=64, BLOCK_N=64, BLOCK_K=32,
-            )
-        else:
-            func_name = "int8_dequant_matmul_kernel"
-            approx_kernel = approx_int8_dequant_matmul_kernel_1
-            approx_handle = approx_kernel[(1, 96)](
-                a, b, a_scale, b_scale, c, 1, 6144, 2048,
-                a.stride(0), a.stride(1),
-                b.stride(0), b.stride(1),
-                c.stride(0), c.stride(1),
-                BLOCK_M=64, BLOCK_N=64, BLOCK_K=32,
-            )
+        func_name = "int8_dequant_matmul_kernel"
+        approx_kernel = approx_int8_dequant_matmul_kernel_1
+        approx_handle = approx_kernel[(1, 96)](
+            a, b, a_scale, b_scale, c, 1, 6144, 2048,
+            a.stride(0), a.stride(1),
+            b.stride(0), b.stride(1),
+            c.stride(0), c.stride(1),
+            BLOCK_M=64, BLOCK_N=64, BLOCK_K=32,
+        )
     extra_ttir = [approx_handle.asm["ttir"]] if "ttir" in approx_handle.asm else []
     if not extra_ttir:
         raise RuntimeError("approx kernel did not expose ttir asm")
@@ -727,8 +684,6 @@ def main() -> int:
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     sys.path.insert(0, str(Path(__file__).parent))
-    from kernels.quant_kernels import pack_b_i8_per_group_fp16_storage, quantize_b_i8_per_col
-
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")
 
@@ -736,14 +691,6 @@ def main() -> int:
     prompt = os.environ.get("QWEN_PROMPT", "Write one short sentence about Paris.")
     decode_steps = int(os.environ.get("QWEN_DECODE_STEPS", "8"))
     group_size = int(os.environ.get("APPROX_GROUP_SIZE", "128"))
-    quant_bits = int(os.environ.get("APPROX_BITS", "8"))
-    if quant_bits not in (4, 8):
-        raise RuntimeError("APPROX_BITS must be 4 or 8")
-    approx_impl = os.environ.get("APPROX_IMPL", "packed_dequant")
-    if approx_impl not in ("packed_dequant", "fast_int8"):
-        raise RuntimeError("APPROX_IMPL must be packed_dequant or fast_int8")
-    if approx_impl == "fast_int8" and quant_bits != 8:
-        raise RuntimeError("fast_int8 currently supports APPROX_BITS=8 only")
     use_substitute = os.environ.get("APPROX_USE_SUBSTITUTE", "1") == "1"
     use_inductor = os.environ.get("QWEN_USE_INDUCTOR", "0") == "1"
     inductor_scope = os.environ.get("QWEN_INDUCTOR_SCOPE", "model" if use_inductor else "none")
@@ -775,27 +722,22 @@ def main() -> int:
     if not targets:
         raise RuntimeError("No target modules were patched")
 
-    if approx_impl == "fast_int8":
-        target_names = {fqn for _, fqn, _, _, _ in targets}
+    target_names = {fqn for _, fqn, _, _, _ in targets}
 
-        def _filter_fn(mod: nn.Module, fqn: str) -> bool:
-            return isinstance(mod, nn.Linear) and fqn in target_names
+    def _filter_fn(mod: nn.Module, fqn: str) -> bool:
+        return isinstance(mod, nn.Linear) and fqn in target_names
 
-        quantize_(
-            model,
-            ApproxInt8DynamicActivationInt8WeightConfig(
-                group_size=group_size,
-                weight_only_decode=False,
-            ),
-            _filter_fn,
-        )
+    quantize_(
+        model,
+        ApproxInt8DynamicActivationInt8WeightConfig(group_size=group_size),
+        _filter_fn,
+    )
 
     wrappers: list[nn.Module] = []
     patched_names: list[str] = []
     consumed_layers: set[int] = set()
     if (
-        approx_impl == "fast_int8"
-        and fuse_gate_up
+        fuse_gate_up
         and patch_set == {"gate_proj", "up_proj"}
     ):
         for layer_idx in sorted({layer_idx for layer_idx, *_ in targets}):
@@ -809,9 +751,9 @@ def main() -> int:
     for layer_idx, _fqn, parent, name, linear in targets:
         if layer_idx in consumed_layers:
             continue
-        wrapper = TritonDecodeLinear(linear, group_size, quant_bits, approx_impl)
+        wrapper = TritonDecodeLinear(linear, group_size)
         wrapper.to("cuda")
-        wrapper.finalize_approx(pack_b_i8_per_group_fp16_storage, quantize_b_i8_per_col)
+        wrapper.finalize_approx()
         setattr(parent, name, wrapper)
         wrappers.append(wrapper)
         patched_names.append(f"{layer_idx}.{name}")
@@ -844,7 +786,6 @@ def main() -> int:
     hook = _build_hook(
         plugin,
         activation_dtype=hook_activation_dtype,
-        approx_impl=approx_impl,
         fused_gate_up=fuse_gate_up and patch_set == {"gate_proj", "up_proj"},
     ) if use_substitute else None
     for wrapper in wrappers:
@@ -898,22 +839,19 @@ def main() -> int:
         )
     else:
         exact_bytes = first.weight_t_exact.numel() * first.weight_t_exact.element_size()
-        if approx_impl == "packed_dequant":
-            packed_bytes = first.weight_t_packed.numel() * first.weight_t_packed.element_size()
-        else:
-            packed_bytes = (
-                first.weight_t_i8.numel() * first.weight_t_i8.element_size()
-                + first.weight_t_i8_scale.numel() * first.weight_t_i8_scale.element_size()
-            )
+        packed_bytes = (
+            first.weight_t_i8.numel() * first.weight_t_i8.element_size()
+            + first.weight_t_i8_scale.numel() * first.weight_t_i8_scale.element_size()
+        )
     print(f"model:                     {model_id}")
     print(f"patched modules:           {len(wrappers)} ({','.join(sorted(patch_set))})")
     print(f"patched layer names:       {','.join(patched_names[:8])}{'...' if len(patched_names) > 8 else ''}")
     print(f"decode steps:              {decode_steps}")
-    print(f"approx impl:               {approx_impl}")
+    print("approx impl:               dynamic_int8")
     print(f"use inductor:              {use_inductor}")
     print(f"inductor scope:            {inductor_scope if use_inductor else 'none'}")
     print(f"use static cache:          {use_static_cache}")
-    print(f"quant bits:                {quant_bits}")
+    print("quant bits:                8")
     print(f"group_size_k:              {group_size}")
     print(f"substitution hits:         {substitution_hits}")
     print(f"actq cache hits/misses:    {actq_cache_hits}/{actq_cache_misses}")

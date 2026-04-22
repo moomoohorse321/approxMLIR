@@ -8,14 +8,8 @@ import torch.nn as nn
 
 
 @dataclass
-class ApproxInt8WeightOnlyConfig:
-    group_size: Optional[int] = None
-
-
-@dataclass
 class ApproxInt8DynamicActivationInt8WeightConfig:
     group_size: Optional[int] = None
-    weight_only_decode: bool = False
 
 
 @dataclass
@@ -30,7 +24,6 @@ class ApproxAffineQuantizedTensor:
 class ApproxLinearActivationQuantizedTensor:
     original_weight_tensor: ApproxAffineQuantizedTensor
     input_quant_func: Callable[[torch.Tensor], tuple[torch.Tensor, torch.Tensor]]
-    weight_only_decode: bool = False
 
 
 def _quantize_weight_per_col(weight_t: torch.Tensor) -> ApproxAffineQuantizedTensor:
@@ -61,7 +54,7 @@ def _quantize_weight_per_group(
 
 def to_affine_quantized_intx(
     weight_t: torch.Tensor,
-    config: ApproxInt8WeightOnlyConfig | ApproxInt8DynamicActivationInt8WeightConfig,
+    config: ApproxInt8DynamicActivationInt8WeightConfig,
 ) -> ApproxAffineQuantizedTensor:
     if weight_t.dtype not in (torch.float16, torch.bfloat16) or not weight_t.is_cuda:
         raise ValueError("expected CUDA fp16/bf16 weight tensor")
@@ -74,30 +67,21 @@ def to_affine_quantized_intx(
 def to_linear_activation_quantized(
     weight: ApproxAffineQuantizedTensor,
     input_quant_func: Callable[[torch.Tensor], tuple[torch.Tensor, torch.Tensor]],
-    *,
-    weight_only_decode: bool = False,
 ) -> ApproxLinearActivationQuantizedTensor:
     return ApproxLinearActivationQuantizedTensor(
         original_weight_tensor=weight,
         input_quant_func=input_quant_func,
-        weight_only_decode=weight_only_decode,
     )
 
 
 def quantize_linear_weight(
     weight_t: torch.Tensor,
-    config: ApproxInt8WeightOnlyConfig | ApproxInt8DynamicActivationInt8WeightConfig,
-) -> ApproxAffineQuantizedTensor | ApproxLinearActivationQuantizedTensor:
+    config: ApproxInt8DynamicActivationInt8WeightConfig,
+) -> ApproxLinearActivationQuantizedTensor:
     from kernels.quant_kernels import quantize_a_i8_per_row
 
     weight = to_affine_quantized_intx(weight_t, config)
-    if isinstance(config, ApproxInt8DynamicActivationInt8WeightConfig):
-        return to_linear_activation_quantized(
-            weight,
-            quantize_a_i8_per_row,
-            weight_only_decode=config.weight_only_decode,
-        )
-    return weight
+    return to_linear_activation_quantized(weight, quantize_a_i8_per_row)
 
 
 def _is_linear_module(module: nn.Module, _fqn: str) -> bool:
@@ -106,7 +90,7 @@ def _is_linear_module(module: nn.Module, _fqn: str) -> bool:
 
 def quantize_(
     module: nn.Module,
-    config: ApproxInt8WeightOnlyConfig | ApproxInt8DynamicActivationInt8WeightConfig,
+    config: ApproxInt8DynamicActivationInt8WeightConfig,
     filter_fn: Optional[Callable[[nn.Module, str], bool]] = None,
     *,
     cur_fqn: str = "",

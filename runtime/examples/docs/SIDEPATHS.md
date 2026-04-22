@@ -7,7 +7,6 @@ Use these when you need:
 
 - regime characterization
 - fast-path probing
-- isolated Triton function-substitution debugging
 - TTIR dumping / observation
 
 If you want the minimal real-model quantization path, do not start here.

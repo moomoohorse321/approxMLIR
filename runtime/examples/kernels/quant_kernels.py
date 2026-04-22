@@ -1,4 +1,4 @@
-"""Approximate Triton kernels for Stage 2(a) func_substitute demo."""
+"""Approximate Triton kernels for Qwen quantization demos."""
 
 from __future__ import annotations
 
@@ -84,66 +84,6 @@ def quantize_b_i8_per_group(
         q[start:end, :] = torch.clamp(torch.round(block / scale[None, :]), -127, 127).to(torch.int8)
         scales[g, :] = scale
     return q.contiguous(), scales.contiguous()
-
-
-def pack_b_i8_per_group_fp16_storage(
-    b: torch.Tensor, group_size_k: int, quant_bits: int = 8
-) -> torch.Tensor:
-    """Pack a fp16 weight matrix into fp16 storage plus fp16 group scales.
-
-    Layout:
-    - first packed words: signed low-bit values packed into uint16 lanes,
-      then reinterpreted as fp16 storage
-    - final ``ceil(K / group_size_k) * N`` fp16 values: one dequant scale per
-      K-group and output column
-    """
-    if b.dtype not in (torch.float16, torch.bfloat16) or b.ndim != 2 or not b.is_cuda:
-        raise ValueError("expected a CUDA fp16/bf16 matrix")
-    if group_size_k <= 0:
-        raise ValueError("group_size_k must be positive")
-    if quant_bits not in (4, 8):
-        raise ValueError("quant_bits must be 4 or 8")
-    k, n = b.shape
-    qmax = 127.0 if quant_bits == 8 else 7.0
-    pack_factor = 2 if quant_bits == 8 else 4
-    num_groups = (k + group_size_k - 1) // group_size_k
-    q = torch.empty_like(b, dtype=torch.int8)
-    scales = torch.empty((num_groups, n), device=b.device, dtype=torch.float16)
-    for g in range(num_groups):
-        start = g * group_size_k
-        end = min(start + group_size_k, k)
-        block = b[start:end, :].float()
-        scale = block.abs().amax(dim=0).clamp_min(1.0e-8) / qmax
-        q[start:end, :] = torch.clamp(
-            torch.round(block / scale.unsqueeze(0)), -qmax, qmax
-        ).to(torch.int8)
-        scales[g, :] = scale
-    q_i16 = q.to(torch.int16)
-    remainder = k % pack_factor
-    if remainder:
-        q_i16 = torch.cat(
-            [
-                q_i16,
-                torch.zeros((pack_factor - remainder, n), device=q.device, dtype=torch.int16),
-            ],
-            dim=0,
-        )
-        k += pack_factor - remainder
-    if quant_bits == 8:
-        low = (q_i16[0::2, :] & 0xFF).to(torch.int16)
-        high = ((q_i16[1::2, :] & 0xFF) << 8).to(torch.int16)
-        packed_u16 = (low | high).to(torch.uint16)
-    else:
-        q_u16 = (q_i16 & 0x0F).to(torch.int16)
-        packed_u16 = (
-            q_u16[0::4, :]
-            | (q_u16[1::4, :] << 4)
-            | (q_u16[2::4, :] << 8)
-            | (q_u16[3::4, :] << 12)
-        ).to(torch.uint16)
-    packed_u16 = packed_u16.contiguous()
-    packed_storage = packed_u16.view(torch.float16).reshape(-1)
-    return torch.cat([packed_storage, scales.contiguous().reshape(-1)], dim=0)
 
 
 @triton.jit
@@ -360,62 +300,3 @@ def approx_int8_dual_dequant_matmul_kernel_1(
     mask_c = (offs_m[:, None] < M) & (offs_n[None, :] < N)
     tl.store(c1_ptrs, out1.to(c1_ptr.dtype.element_ty), mask=mask_c)
     tl.store(c2_ptrs, out2.to(c2_ptr.dtype.element_ty), mask=mask_c)
-
-
-@triton.jit
-def approx_matmul_kernel_1(
-    a_ptr, b_ptr, c_ptr,
-    M, N, K,
-    stride_am, stride_ak,
-    stride_bk, stride_bn,
-    stride_cm, stride_cn,
-    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
-):
-    # b_ptr points to host-prepacked storage: packed low-bit weights followed by fp16 scales.
-    pid_m = tl.program_id(0)
-    pid_n = tl.program_id(1)
-    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-    offs_k = tl.arange(0, BLOCK_K)
-    a_ptrs = a_ptr + offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak
-    group_size_k = stride_bk
-    quant_bits = stride_bn
-    pack_factor = 2 if quant_bits == 8 else 4
-    packed_k = (K + pack_factor - 1) // pack_factor
-    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
-    for k in range(0, tl.cdiv(K, BLOCK_K)):
-        mask_k = offs_k[None, :] < (K - k * BLOCK_K)
-        a = tl.load(a_ptrs, mask=mask_k, other=0.0)
-        k_idx = k * BLOCK_K + offs_k
-        packed_rows = k_idx[:, None] // pack_factor
-        packed_ptrs = b_ptr + packed_rows * N + offs_n[None, :]
-        valid_b = k_idx[:, None] < K
-        packed_f16 = tl.load(packed_ptrs, mask=valid_b, other=0.0)
-        packed_u16 = packed_f16.to(tl.uint16, bitcast=True)
-        if quant_bits == 8:
-            low = (packed_u16 & 0x00FF).to(tl.int16)
-            high = ((packed_u16 >> 8) & 0x00FF).to(tl.int16)
-            q_i16 = tl.where((k_idx[:, None] & 1) == 0, low, high)
-            q_i16 = tl.where(q_i16 >= 128, q_i16 - 256, q_i16)
-        else:
-            nib0 = (packed_u16 & 0x000F).to(tl.int16)
-            nib1 = ((packed_u16 >> 4) & 0x000F).to(tl.int16)
-            nib2 = ((packed_u16 >> 8) & 0x000F).to(tl.int16)
-            nib3 = ((packed_u16 >> 12) & 0x000F).to(tl.int16)
-            sel = k_idx[:, None] & 3
-            q_i16 = tl.where(
-                sel == 0,
-                nib0,
-                tl.where(sel == 1, nib1, tl.where(sel == 2, nib2, nib3)),
-            )
-            q_i16 = tl.where(q_i16 >= 8, q_i16 - 16, q_i16)
-        group_idx = k_idx[:, None] // group_size_k
-        scale_ptrs = b_ptr + packed_k * N + group_idx * N + offs_n[None, :]
-        scale = tl.load(scale_ptrs, mask=valid_b & (offs_n[None, :] < N), other=0.0)
-        b_dq = q_i16.to(tl.float32) * scale.to(tl.float32)
-        acc += tl.dot(a, b_dq.to(a.dtype))
-        a_ptrs += BLOCK_K * stride_ak
-    c = acc.to(c_ptr.dtype.element_ty)
-    c_ptrs = c_ptr + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn
-    mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)
-    tl.store(c_ptrs, c, mask=mask)
