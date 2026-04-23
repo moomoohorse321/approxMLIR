@@ -78,10 +78,12 @@ def _merge_extra_ttir_functions(
     mlir_text: str, extra_ttir_texts: List[str]
 ) -> str:
     defs: List[str] = []
+    seen = set()
     for extra in extra_ttir_texts:
         for name, block in _extract_all_ttir_function_blocks(extra):
-            if _has_ttir_function(mlir_text, name):
+            if name in seen or _has_ttir_function(mlir_text, name):
                 continue
+            seen.add(name)
             defs.append(block)
     return _append_module_defs(mlir_text, defs)
 
