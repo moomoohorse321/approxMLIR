@@ -58,29 +58,53 @@ _CASES: list[tuple[str, dict[str, str]]] = [
             "APPROX_SGLANG_USE_SUBSTITUTE": "1",
         },
     ),
-    (
-        "gate_up_qkv_w8a16_drop",
-        {
-            "APPROX_SGLANG_QUANT": "1",
-            "APPROX_SGLANG_MODE": "approx",
-            "APPROX_SGLANG_TARGET": "gate_up_proj,qkv_proj",
-            "APPROX_SGLANG_BACKEND": "triton_w8a16",
-            "APPROX_SGLANG_DROP_ORIGINAL_WEIGHT": "1",
-            "APPROX_SGLANG_USE_SUBSTITUTE": "1",
-        },
-    ),
-    (
-        "gate_up_down_w8a16_drop",
-        {
-            "APPROX_SGLANG_QUANT": "1",
-            "APPROX_SGLANG_MODE": "approx",
-            "APPROX_SGLANG_TARGET": "gate_up_proj,down_proj",
-            "APPROX_SGLANG_BACKEND": "triton_w8a16",
-            "APPROX_SGLANG_DROP_ORIGINAL_WEIGHT": "1",
-            "APPROX_SGLANG_USE_SUBSTITUTE": "1",
-        },
-    ),
 ]
+
+if os.environ.get("APPROX_SGLANG_SQ_ARTIFACT_PATH"):
+    _CASES.append(
+        (
+            "gate_up_sq_w4a16",
+            {
+                "APPROX_SGLANG_QUANT": "1",
+                "APPROX_SGLANG_MODE": "approx",
+                "APPROX_SGLANG_TARGET": "gate_up_proj",
+                "APPROX_SGLANG_BACKEND": "triton_sq_w4a16",
+                "APPROX_SGLANG_USE_SUBSTITUTE": "1",
+                "APPROX_SGLANG_SQ_ARTIFACT_PATH": os.environ["APPROX_SGLANG_SQ_ARTIFACT_PATH"],
+                "APPROX_SGLANG_SQ_ALPHA": os.environ.get("APPROX_SGLANG_SQ_ALPHA", "0.85"),
+                "APPROX_SGLANG_SQ_GROUP_SIZE": os.environ.get("APPROX_SGLANG_SQ_GROUP_SIZE", "128"),
+                "APPROX_SGLANG_SQ_BLOCK_K": os.environ.get("APPROX_SGLANG_SQ_BLOCK_K", "64"),
+            },
+        )
+    )
+
+if os.environ.get("APPROX_SGLANG_INCLUDE_DROP_CASES", "0") == "1":
+    _CASES.extend(
+        [
+            (
+                "gate_up_qkv_w8a16_drop",
+                {
+                    "APPROX_SGLANG_QUANT": "1",
+                    "APPROX_SGLANG_MODE": "approx",
+                    "APPROX_SGLANG_TARGET": "gate_up_proj,qkv_proj",
+                    "APPROX_SGLANG_BACKEND": "triton_w8a16",
+                    "APPROX_SGLANG_DROP_ORIGINAL_WEIGHT": "1",
+                    "APPROX_SGLANG_USE_SUBSTITUTE": "1",
+                },
+            ),
+            (
+                "gate_up_down_w8a16_drop",
+                {
+                    "APPROX_SGLANG_QUANT": "1",
+                    "APPROX_SGLANG_MODE": "approx",
+                    "APPROX_SGLANG_TARGET": "gate_up_proj,down_proj",
+                    "APPROX_SGLANG_BACKEND": "triton_w8a16",
+                    "APPROX_SGLANG_DROP_ORIGINAL_WEIGHT": "1",
+                    "APPROX_SGLANG_USE_SUBSTITUTE": "1",
+                },
+            ),
+        ]
+    )
 
 
 # Build the full env passed to one probe subprocess: the caller's env, then

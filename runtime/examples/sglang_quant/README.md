@@ -60,25 +60,62 @@ Useful environment variables:
 - `APPROX_SGLANG_QUANT`: set `1` to monkeypatch SGLang linear layers
 - `APPROX_SGLANG_MODE`: `exact` or `approx`, default `exact`
 - `APPROX_SGLANG_TARGET`: comma-separated substring filter, default `proj`
-- `APPROX_SGLANG_BACKEND`: `triton_w8a16`, `triton_prequant`, `triton`, or
-  `sgl_kernel`; current useful path is `triton_w8a16`
+- `APPROX_SGLANG_BACKEND`: `triton_w8a16`, `triton_sq_w4a16`,
+  `triton_prequant`, `triton`, or `sgl_kernel`
 - `APPROX_SGLANG_DECODE_ONLY`: only patch M=1 decode calls, default `1`
 - `APPROX_SGLANG_USE_SUBSTITUTE`: set `1` to run approxMLIR function
   substitution on the selected Triton kernel
 - `APPROX_SGLANG_DROP_ORIGINAL_WEIGHT`: drop original fp weights after
   prequantization for wide coverage; only safe in approx mode
+- `APPROX_SGLANG_SQ_COLLECT`: collect per-layer activation absmax for
+  SmoothQuant-style calibration
+- `APPROX_SGLANG_SQ_STATS_DIR`: directory for calibration shards
+- `APPROX_SGLANG_SQ_ARTIFACT_PATH`: merged SmoothQuant artifact path
+- `APPROX_SGLANG_SQ_ALPHA`: smoothing exponent, default `0.85`
+- `APPROX_SGLANG_SQ_GROUP_SIZE`: W4 group size, default `128`
+- `APPROX_SGLANG_SQ_BLOCK_K`: SQ-W4 K tile size, default `64`
+
+SmoothQuant-style calibration flow:
+
+```bash
+source .venv/bin/activate
+
+OUT_DIR=/tmp/approx_sq_cal \
+MODEL_PATH=Qwen/Qwen3.5-2B \
+BATCH_SIZE=4 \
+MAX_NEW_TOKENS=8 \
+WARMUP_RUNS=1 \
+MEASURE_RUNS=1 \
+APPROX_SGLANG_QUANT=1 \
+APPROX_SGLANG_MODE=exact \
+APPROX_SGLANG_TARGET=gate_up_proj \
+APPROX_SGLANG_BACKEND=triton_sq_w4a16 \
+APPROX_SGLANG_SQ_COLLECT=1 \
+TRITON_PASS_PLUGIN_PATH=$PWD/approxMLIR/external-tools/approx-triton-plugin/build/lib/libApproxTritonPlugin.so \
+python3 approxMLIR/runtime/examples/sglang_quant/probe_sglang_triton_dump.py
+
+APPROX_SGLANG_SQ_STATS_DIR=/tmp/approx_sq_cal/sq_stats \
+APPROX_SGLANG_SQ_ARTIFACT_PATH=/tmp/approx_sq_cal/sq_artifact.pt \
+python3 approxMLIR/runtime/examples/sglang_quant/build_smoothquant_artifact.py
+```
 
 Current Qwen3.5-2B result on the RTX 4060 Laptop, batch=4, 8 generated tokens,
 CUDA graph enabled:
 
-- exact SGLang/Triton median: `0.212s`
-- `gate_up_proj` W8A16 substitute median: `0.152s` (`1.40x`)
-- `qkv_proj` W8A16 substitute median: `0.201s` (`1.06x`)
-- `gate_up_proj,qkv_proj` median: `0.206s`
-- `gate_up_proj,down_proj` median: `0.211s`
+- exact SGLang/Triton median: about `0.204s`
+- `gate_up_proj` W8A16 substitute median: about `0.156s` (`1.31x`)
+- `qkv_proj` W8A16 substitute median: about `0.199s` (`1.02x`)
+- `gate_up_proj` SmoothQuant-style W4A16 full coverage median: about `0.226s`
+  with checked-output divergence
+- `gate_up_proj` SmoothQuant-style W4A16 decode-only, group size `128`,
+  block size `64`: about `0.194s` (`1.05x`) with checked-output match on
+  the probe prompt
 
 The practical frontier is selective, not maximum coverage. `gate_up_proj` is
 the current useful target; `down_proj` regresses because the W8A16 kernel is not
-a fast path for that shape. CUDA graph must be enabled for serving-like numbers,
+a fast path for that shape. On the tested Qwen3.5-2B setup, the new
+`triton_sq_w4a16` path is calibrated and functional, but its current kernel only
+becomes a useful secondary point when tuned for decode-only with `group=128`
+and `block_k=64`. CUDA graph must be enabled for serving-like numbers,
 otherwise launch overhead dominates and the same replacement can look flat or
 negative.

@@ -94,6 +94,12 @@ def _configure_environment(out_dir: Path) -> Path:
     os.environ["TRITON_CACHE_DIR"] = str(cache_dir)
     os.environ["APPROX_SGLANG_DUMP_OUT_DIR"] = str(out_dir)
     os.environ.setdefault("APPROX_SGLANG_STATS_PATH", str(out_dir / "quant_stats.jsonl"))
+    if os.environ.get("APPROX_SGLANG_SQ_COLLECT", "0") == "1":
+        os.environ["SGLANG_DISABLE_CUDA_GRAPH"] = "1"
+        sq_stats_dir = Path(os.environ.get("APPROX_SGLANG_SQ_STATS_DIR", str(out_dir / "sq_stats")))
+        shutil.rmtree(sq_stats_dir, ignore_errors=True)
+        sq_stats_dir.mkdir(parents=True, exist_ok=True)
+        os.environ["APPROX_SGLANG_SQ_STATS_DIR"] = str(sq_stats_dir)
     os.environ["APPROX_SOURCE_TRITON_PYTHON"] = str(SOURCE_TRITON_PYTHON)
     os.environ["APPROX_EXAMPLES_ROOT"] = str(EXAMPLES_ROOT)
     bootstrap = THIS_FILE.parent / "bootstrap"
