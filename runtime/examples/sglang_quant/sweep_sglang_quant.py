@@ -77,6 +77,22 @@ if os.environ.get("APPROX_SGLANG_SQ_ARTIFACT_PATH"):
             },
         )
     )
+    _CASES.append(
+        (
+            "gate_up_awq_w4a16",
+            {
+                "APPROX_SGLANG_QUANT": "1",
+                "APPROX_SGLANG_MODE": "approx",
+                "APPROX_SGLANG_TARGET": "gate_up_proj",
+                "APPROX_SGLANG_BACKEND": "triton_awq_w4a16",
+                "APPROX_SGLANG_USE_SUBSTITUTE": "1",
+                "APPROX_SGLANG_SQ_ARTIFACT_PATH": os.environ["APPROX_SGLANG_SQ_ARTIFACT_PATH"],
+                "APPROX_SGLANG_SQ_GROUP_SIZE": os.environ.get("APPROX_SGLANG_SQ_GROUP_SIZE", "128"),
+                "APPROX_SGLANG_SQ_BLOCK_K": os.environ.get("APPROX_SGLANG_SQ_BLOCK_K", "64"),
+                "APPROX_SGLANG_AWQ_GRID_SIZE": os.environ.get("APPROX_SGLANG_AWQ_GRID_SIZE", "20"),
+            },
+        )
+    )
 
 if os.environ.get("APPROX_SGLANG_INCLUDE_DROP_CASES", "0") == "1":
     _CASES.extend(

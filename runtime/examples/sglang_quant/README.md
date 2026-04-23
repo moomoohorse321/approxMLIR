@@ -61,6 +61,7 @@ Useful environment variables:
 - `APPROX_SGLANG_MODE`: `exact` or `approx`, default `exact`
 - `APPROX_SGLANG_TARGET`: comma-separated substring filter, default `proj`
 - `APPROX_SGLANG_BACKEND`: `triton_w8a16`, `triton_sq_w4a16`,
+  `triton_awq_w4a16`,
   `triton_prequant`, `triton`, or `sgl_kernel`
 - `APPROX_SGLANG_DECODE_ONLY`: only patch M=1 decode calls, default `1`
 - `APPROX_SGLANG_USE_SUBSTITUTE`: set `1` to run approxMLIR function
@@ -74,6 +75,7 @@ Useful environment variables:
 - `APPROX_SGLANG_SQ_ALPHA`: smoothing exponent, default `0.85`
 - `APPROX_SGLANG_SQ_GROUP_SIZE`: W4 group size, default `128`
 - `APPROX_SGLANG_SQ_BLOCK_K`: SQ-W4 K tile size, default `64`
+- `APPROX_SGLANG_AWQ_GRID_SIZE`: AWQ-style ratio search grid size, default `20`
 
 SmoothQuant-style calibration flow:
 
@@ -99,6 +101,21 @@ APPROX_SGLANG_SQ_ARTIFACT_PATH=/tmp/approx_sq_cal/sq_artifact.pt \
 python3 approxMLIR/runtime/examples/sglang_quant/build_smoothquant_artifact.py
 ```
 
+AWQ-style W4 uses the same calibration artifact path, but swaps the load-time
+quantizer:
+
+```bash
+APPROX_SGLANG_QUANT=1 \
+APPROX_SGLANG_MODE=approx \
+APPROX_SGLANG_TARGET=gate_up_proj \
+APPROX_SGLANG_BACKEND=triton_awq_w4a16 \
+APPROX_SGLANG_SQ_ARTIFACT_PATH=/tmp/approx_sq_cal/sq_artifact.pt \
+APPROX_SGLANG_SQ_GROUP_SIZE=128 \
+APPROX_SGLANG_SQ_BLOCK_K=64 \
+APPROX_SGLANG_AWQ_GRID_SIZE=20 \
+python3 approxMLIR/runtime/examples/sglang_quant/probe_sglang_triton_dump.py
+```
+
 Current Qwen3.5-2B result on the RTX 4060 Laptop, batch=4, 8 generated tokens,
 CUDA graph enabled:
 
@@ -116,6 +133,8 @@ the current useful target; `down_proj` regresses because the W8A16 kernel is not
 a fast path for that shape. On the tested Qwen3.5-2B setup, the new
 `triton_sq_w4a16` path is calibrated and functional, but its current kernel only
 becomes a useful secondary point when tuned for decode-only with `group=128`
-and `block_k=64`. CUDA graph must be enabled for serving-like numbers,
-otherwise launch overhead dominates and the same replacement can look flat or
-negative.
+and `block_k=64`. `triton_awq_w4a16` now runs in parallel to that path with the
+same online kernel and decode-tiled layout, but a different load-time
+activation-aware group-wise W4 quantizer. CUDA graph must be enabled for
+serving-like numbers, otherwise launch overhead dominates and the same
+replacement can look flat or negative.

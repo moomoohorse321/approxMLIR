@@ -40,7 +40,7 @@ def _install_dump_hook() -> None:
             if backend == "triton_prequant":
                 target_func = "sglang_prequant_w8a8_linear_kernel"
                 approx_kernel = approx_sglang_prequant_w8a8_linear_kernel_1
-            elif backend == "triton_sq_w4a16":
+            elif backend in ("triton_sq_w4a16", "triton_awq_w4a16"):
                 target_func = "sglang_sq_w4a16_linear_kernel"
                 approx_kernel = approx_sglang_sq_w4a16_linear_kernel_1
             elif backend == "triton_w8a16":

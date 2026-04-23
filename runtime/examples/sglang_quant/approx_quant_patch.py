@@ -9,6 +9,7 @@
 # The current useful paths are:
 #   * triton_w8a16      — load-time int8 weight-only path
 #   * triton_sq_w4a16   — SmoothQuant-style calibrated group-wise int4 path
+#   * triton_awq_w4a16  — AWQ-style calibrated group-wise int4 path
 #
 # For the SQ-W4 path, the flow is split deliberately:
 #   * offline calibration collects activation absmax statistics per layer
@@ -56,6 +57,7 @@ class _Config:
     sq_artifact_path: str
     sq_alpha: float
     sq_group_size: int
+    awq_grid_size: int
 
     @classmethod
     def from_env(cls) -> "_Config":
@@ -71,6 +73,7 @@ class _Config:
             sq_artifact_path=os.environ.get("APPROX_SGLANG_SQ_ARTIFACT_PATH", ""),
             sq_alpha=float(os.environ.get("APPROX_SGLANG_SQ_ALPHA", "0.85")),
             sq_group_size=int(os.environ.get("APPROX_SGLANG_SQ_GROUP_SIZE", "128")),
+            awq_grid_size=int(os.environ.get("APPROX_SGLANG_AWQ_GRID_SIZE", "20")),
         )
 
     def target_match(self, layer: torch.nn.Module) -> bool:
@@ -131,6 +134,7 @@ def _install() -> None:
         approx_sglang_dynamic_w8a8_linear_kernel_1,
         approx_sglang_prequant_w8a8_linear_kernel_1,
         approx_sglang_sq_w4a16_linear_kernel_1,
+        awq_quantize_weight_i4_groupwise_packed,
         approx_sglang_w8a16_linear_kernel_1,
         quantize_activation_i8_per_row,
         quantize_weight_i8_per_col,
@@ -241,7 +245,7 @@ def _install() -> None:
         return sq_artifact_layers
 
     def _prepared_weight_name() -> str:
-        if cfg.backend == "triton_sq_w4a16":
+        if cfg.backend in ("triton_sq_w4a16", "triton_awq_w4a16"):
             return "_approx_sq_qweight_i4_t_packed"
         return "_approx_qweight_i8_t"
 
@@ -258,7 +262,7 @@ def _install() -> None:
         prefix = getattr(layer, "prefix", "")
         qweight_name = _prepared_weight_name()
         extra_record: dict[str, object] = {}
-        if cfg.backend == "triton_sq_w4a16":
+        if cfg.backend in ("triton_sq_w4a16", "triton_awq_w4a16"):
             sq_layers = _load_sq_artifact_layers()
             act_absmax = None if sq_layers is None else sq_layers.get(prefix)
             if act_absmax is None:
@@ -271,12 +275,33 @@ def _install() -> None:
                 )
                 return False
             try:
-                q, scale_g, smooth_inv = smoothquant_quantize_weight_i4_groupwise_packed(
-                    weight.data,
-                    torch.as_tensor(act_absmax),
-                    alpha=cfg.sq_alpha,
-                    group_size=cfg.sq_group_size,
-                )
+                if cfg.backend == "triton_sq_w4a16":
+                    q, scale_g, smooth_inv = smoothquant_quantize_weight_i4_groupwise_packed(
+                        weight.data,
+                        torch.as_tensor(act_absmax),
+                        alpha=cfg.sq_alpha,
+                        group_size=cfg.sq_group_size,
+                    )
+                    extra_record = {
+                        "quant_method": "smoothquant",
+                        "scale_shape": list(scale_g.shape),
+                        "group_size": cfg.sq_group_size,
+                        "alpha": cfg.sq_alpha,
+                    }
+                else:
+                    q, scale_g, smooth_inv, awq_ratio = awq_quantize_weight_i4_groupwise_packed(
+                        weight.data,
+                        torch.as_tensor(act_absmax),
+                        group_size=cfg.sq_group_size,
+                        grid_size=cfg.awq_grid_size,
+                    )
+                    extra_record = {
+                        "quant_method": "awq",
+                        "scale_shape": list(scale_g.shape),
+                        "group_size": cfg.sq_group_size,
+                        "awq_grid_size": cfg.awq_grid_size,
+                        "awq_ratio": awq_ratio,
+                    }
             except Exception as exc:
                 _record(
                     {
@@ -341,12 +366,6 @@ def _install() -> None:
                     }
                 )
             qweight_bits = 4
-            extra_record = {
-                "scale_shape": list(scale_g.shape),
-                "group_size": cfg.sq_group_size,
-                "alpha": cfg.sq_alpha,
-                **extra_record,
-            }
         else:
             q, scale = quantize_weight_i8_per_col(weight.data)
             layer.register_buffer(qweight_name, q, persistent=False)
@@ -536,8 +555,9 @@ def _install() -> None:
             GROUP_K=cfg.sq_group_size,
             DECODE_TILE_LAYOUT=1 if use_decode_tiled else 0,
         )
+        backend_name = cfg.backend if cfg.backend in ("triton_sq_w4a16", "triton_awq_w4a16") else "triton_sq_w4a16"
         shape_key = (
-            "triton_sq_w4a16",
+            backend_name,
             str(x2d.dtype),
             str(bs.dtype),
             smooth_mode,
@@ -558,7 +578,7 @@ def _install() -> None:
             cfg.sq_group_size,
         )
         _run_substituted_kernel(
-            backend_name="triton_sq_w4a16",
+            backend_name=backend_name,
             primary=sglang_sq_w4a16_linear_kernel,
             substitute=approx_sglang_sq_w4a16_linear_kernel_1,
             substitute_name="approx_sglang_sq_w4a16_linear_kernel_1",
@@ -748,6 +768,7 @@ def _install() -> None:
     _BACKENDS = {
         "triton_w8a16": _apply_w8a16,
         "triton_sq_w4a16": _apply_sq_w4a16,
+        "triton_awq_w4a16": _apply_sq_w4a16,
         "triton_prequant": _apply_prequant,
         "triton": _apply_dynamic_w8a8,
         "sgl_kernel": _apply_sgl_kernel,

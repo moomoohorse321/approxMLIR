@@ -66,6 +66,78 @@ def smoothquant_quantize_weight_i4_groupwise_packed(
     return packed, scale.t().contiguous(), smooth.reciprocal().contiguous()
 
 
+def awq_quantize_weight_i4_groupwise_packed(
+    weight: torch.Tensor,
+    act_absmax: torch.Tensor,
+    *,
+    group_size: int = 64,
+    grid_size: int = 20,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, float]:
+    if weight.ndim != 2 or weight.dtype not in (torch.float16, torch.bfloat16):
+        raise ValueError("expected a 2D fp16/bf16 weight")
+    if act_absmax.ndim != 1 or act_absmax.numel() != weight.shape[1]:
+        raise ValueError("expected act_absmax to match the weight input dimension")
+    if group_size <= 0:
+        raise ValueError("expected a positive group_size")
+    if grid_size <= 0:
+        raise ValueError("expected a positive grid_size")
+
+    weight_f = weight.detach().float()
+    weight_t = weight_f.t().contiguous()
+    act_f = act_absmax.detach().float().to(weight_f.device).clamp_min(1.0e-5)
+    act_norm = act_f / act_f.mean().clamp_min(1.0e-5)
+    weight_mean = weight_t.abs().mean(dim=1).clamp_min(1.0e-5)
+
+    def _quantize_scaled_weight(
+        scaled_weight: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        n, k = scaled_weight.shape
+        num_groups = triton.cdiv(k, group_size)
+        k_padded = num_groups * group_size
+        if k_padded != k:
+            padded = torch.zeros((n, k_padded), device=scaled_weight.device, dtype=scaled_weight.dtype)
+            padded[:, :k] = scaled_weight
+            scaled_weight = padded
+        groups = scaled_weight.view(n, num_groups, group_size)
+        scale = groups.abs().amax(dim=2).clamp_min(1.0e-8) / 7.0
+        q = torch.clamp(torch.round(groups / scale[:, :, None]), -7, 7).to(torch.int16)
+        q_t = q.reshape(n, k_padded).t().contiguous()
+        packed = _pack_i4_codes_along_k((q_t + 7).to(torch.uint8))
+        return packed, scale.t().contiguous(), q_t[:k]
+
+    best = None
+    for step in range(grid_size + 1):
+        ratio = float(step) / float(grid_size)
+        scales = (act_norm.pow(ratio) / weight_mean.pow(1.0 - ratio)).clamp(1.0e-4, 1.0e4)
+        scales = scales / (scales.max() * scales.min()).sqrt().clamp_min(1.0e-5)
+        scaled_weight = weight_f * scales[None, :]
+        packed, scale_g, q_t = _quantize_scaled_weight(scaled_weight)
+        expanded_scale = scale_g.t().repeat_interleave(group_size, dim=1)[:, : weight.shape[1]]
+        dequant_weight = (q_t.t().contiguous().float() * expanded_scale) / scales[None, :]
+        loss = (((dequant_weight - weight_f) * act_norm[None, :]) ** 2).mean()
+        candidate = (
+            float(loss.item()),
+            ratio,
+            packed,
+            scale_g,
+            scales.reciprocal().contiguous(),
+        )
+        if best is None or candidate[0] < best[0]:
+            best = candidate
+        del scaled_weight, packed, scale_g, q_t, expanded_scale, dequant_weight, loss
+        if weight.is_cuda and (((step + 1) % 4) == 0 or step == grid_size):
+            torch.cuda.empty_cache()
+
+    assert best is not None
+    _, best_ratio, packed, scale_g, act_scale_inv = best
+    scale_g = scale_g.to(weight.dtype).contiguous()
+    act_scale_inv = act_scale_inv.to(weight.dtype).contiguous()
+    del weight_f, weight_t, act_f, act_norm, weight_mean
+    if weight.is_cuda:
+        torch.cuda.empty_cache()
+    return packed, scale_g, act_scale_inv, best_ratio
+
+
 def repack_i4_packed_for_decode_tile(
     q_packed_t: torch.Tensor,
     scale_g: torch.Tensor,
