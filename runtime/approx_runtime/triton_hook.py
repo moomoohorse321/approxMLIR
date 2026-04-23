@@ -78,21 +78,44 @@ def _merge_extra_ttir_functions(
     mlir_text: str, extra_ttir_texts: List[str]
 ) -> str:
     defs: List[str] = []
+    seen = set()
     for extra in extra_ttir_texts:
         for name, block in _extract_all_ttir_function_blocks(extra):
-            if _has_ttir_function(mlir_text, name):
+            if name in seen or _has_ttir_function(mlir_text, name):
                 continue
+            seen.add(name)
             defs.append(block)
     return _append_module_defs(mlir_text, defs)
 
 
 def _strip_location_attributes(mlir_text: str) -> str:
-    # Drop common inline location attrs and alias defs so merged TTIR snippets
-    # don't depend on location tables from other modules.
-    mlir_text = _LOC_ATTR_RE_NAMED.sub("", mlir_text)
-    mlir_text = _LOC_ATTR_RE_SIMPLE.sub("", mlir_text)
-    mlir_text = _LOC_ALIAS_DEF_RE.sub("", mlir_text)
-    return mlir_text
+    # Balanced-paren walk: flat regex can't match nested loc(callsite(...)) / loc("name"(...)).
+    out: list[str] = []
+    i = 0
+    n = len(mlir_text)
+    while i < n:
+        if (
+            mlir_text.startswith("loc(", i)
+            and (i == 0 or not (mlir_text[i - 1].isalnum() or mlir_text[i - 1] == "_"))
+        ):
+            depth = 1
+            j = i + 4
+            while j < n and depth > 0:
+                ch = mlir_text[j]
+                if ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    depth -= 1
+                j += 1
+            if out and out[-1] == " ":
+                out.pop()
+            i = j
+            continue
+        out.append(mlir_text[i])
+        i += 1
+    stripped = "".join(out)
+    stripped = _LOC_ALIAS_DEF_RE.sub("", stripped)
+    return stripped
 
 
 def _normalize_ttir_visibility(mlir_text: str, entry_func_name: str) -> str:
@@ -194,7 +217,6 @@ def make_triton_stages_hook(
     def inspect_stages_hook(self=None, stages=None, options=None, language=None, capability=None):
         if all(arg is None for arg in (stages, options, language, capability)):
             return key, key_hash
-
         def make_ttir_wrapper(mod, metadata, opt, cap):
             mod = self.make_ttir(mod, metadata, opt, cap)
             original_context = getattr(mod, "context", None)
@@ -219,20 +241,30 @@ def make_triton_stages_hook(
                 )
 
             os.environ["TRITON_PASS_PLUGIN_PATH"] = selected_plugin
+            # Triton C++ reads TRITON_PLUGIN_PATHS (`:`-separated); add ours without clobbering others.
+            _existing = os.environ.get("TRITON_PLUGIN_PATHS", "")
+            _paths = _existing.split(":") if _existing else []
+            if selected_plugin not in _paths:
+                _paths.insert(0, selected_plugin)
+                os.environ["TRITON_PLUGIN_PATHS"] = ":".join(p for p in _paths if p)
             from triton._C.libtriton import ir as triton_ir
             from triton._C.libtriton import passes as triton_passes
             context = original_context
             needs_reparse = context is not None
             if context is None and hasattr(triton_ir, "context"):
                 context = triton_ir.context()
-                if hasattr(triton_ir, "load_dialects"):
-                    triton_ir.load_dialects(context)
                 keepalive_contexts.append(context)
                 needs_reparse = True
             if context is None:
                 raise TritonCompilationError(
                     "Cannot determine Triton IR context for stage hook"
                 )
+            # Plugin dialects (approx.*) must be registered into whichever
+            # context we ended up with — including a context Triton built
+            # before the plugin was loaded. load_dialects is additive, so
+            # calling it on an already-loaded context is safe.
+            if hasattr(triton_ir, "load_dialects"):
+                triton_ir.load_dialects(context)
             if config:
                 metadata_name = metadata.get("name") if isinstance(metadata, dict) else None
                 target_func_name = func_name or metadata_name
@@ -240,6 +272,8 @@ def make_triton_stages_hook(
                     raise TritonCompilationError(
                         "func_name is required when config is provided and metadata has no name"
                     )
+                if not _has_ttir_function(str(mod), target_func_name):
+                    return mod
                 annotated_mlir = inject_annotations(str(mod), target_func_name, config)
                 if extra_ttir_texts:
                     annotated_mlir = _merge_extra_ttir_functions(

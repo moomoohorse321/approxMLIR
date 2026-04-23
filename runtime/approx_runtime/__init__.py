@@ -1,5 +1,16 @@
 """approx-runtime: Python interface for ApproxMLIR compiler toolchain."""
 
+import os as _os
+
+# Triton C++ reads TRITON_PLUGIN_PATHS once at import; add ours to the list without clobbering others.
+_plugin_path = _os.environ.get("TRITON_PASS_PLUGIN_PATH")
+if _plugin_path:
+    _existing = _os.environ.get("TRITON_PLUGIN_PATHS", "")
+    _paths = _existing.split(":") if _existing else []
+    if _plugin_path not in _paths:
+        _paths.insert(0, _plugin_path)
+        _os.environ["TRITON_PLUGIN_PATHS"] = ":".join(p for p in _paths if p)
+
 from .knob import (
     DecisionTree,
     SafetyContract, 
@@ -33,6 +44,11 @@ from .triton_compiler import (
 )
 from .triton_hook import (
     make_triton_stages_hook,
+)
+from .triton_dump import (
+    make_triton_dump_hook,
+    make_launch_recorder,
+    LaunchRecorder,
 )
 
 from .export import (
@@ -115,6 +131,9 @@ __all__ = [
     'TritonCompilationError',
     'compile_with_triton_plugin',
     'make_triton_stages_hook',
+    'make_triton_dump_hook',
+    'make_launch_recorder',
+    'LaunchRecorder',
     # JAX export
     'export_to_mlir',
     'export_module',

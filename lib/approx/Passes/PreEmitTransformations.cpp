@@ -170,6 +170,18 @@ struct PreEmitFuncConversion
       }
     }
   }
+  /**
+   * def x():
+   *  op1()
+   *  op2()
+   * -> after this pass
+   * 
+   * def __x():
+   *  op1()
+   *  op2()
+   * def x():
+   *  call __x()
+   */
   
   LogicalResult
   matchAndRewrite(approx::utilAnnotationConvertToCallOp annotationOp,

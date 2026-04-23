@@ -24,6 +24,17 @@ if not PLUGIN:
     )
 
 @triton.jit
+def exact_add_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    tl.store(out_ptr + offsets, x + y, mask=mask)
+
+
+@triton.jit
 def add_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
@@ -70,7 +81,7 @@ def main():
     grid = lambda meta: (triton.cdiv(size, meta["BLOCK_SIZE"]),)
 
     knobs.runtime.add_stages_inspection_hook = None
-    add_kernel[grid](x, y, out_exact, size, BLOCK_SIZE=256)
+    exact_add_kernel[grid](x, y, out_exact, size, BLOCK_SIZE=256)
     approx_handle = approx_add_kernel_1[grid](x, y, out_approx_ref, size, BLOCK_SIZE=256)
     extra_ttir = [approx_handle.asm["ttir"]] if "ttir" in approx_handle.asm else []
 
