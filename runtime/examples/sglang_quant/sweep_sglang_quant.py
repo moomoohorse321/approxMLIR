@@ -61,6 +61,15 @@ _CASES: list[tuple[str, dict[str, str]]] = [
 ]
 
 if os.environ.get("APPROX_SGLANG_SQ_ARTIFACT_PATH"):
+    _w4_common = {
+        "APPROX_SGLANG_USE_SUBSTITUTE": "1",
+        "APPROX_SGLANG_SQ_ARTIFACT_PATH": os.environ["APPROX_SGLANG_SQ_ARTIFACT_PATH"],
+        "APPROX_SGLANG_SQ_ALPHA": os.environ.get("APPROX_SGLANG_SQ_ALPHA", "0.85"),
+        "APPROX_SGLANG_SQ_GROUP_SIZE": os.environ.get(
+            "APPROX_SGLANG_SQ_GROUP_SIZE", "128"
+        ),
+        "APPROX_SGLANG_SQ_BLOCK_K": os.environ.get("APPROX_SGLANG_SQ_BLOCK_K", "64"),
+    }
     _CASES.append(
         (
             "gate_up_sq_w4a16",
@@ -69,11 +78,7 @@ if os.environ.get("APPROX_SGLANG_SQ_ARTIFACT_PATH"):
                 "APPROX_SGLANG_MODE": "approx",
                 "APPROX_SGLANG_TARGET": "gate_up_proj",
                 "APPROX_SGLANG_BACKEND": "triton_sq_w4a16",
-                "APPROX_SGLANG_USE_SUBSTITUTE": "1",
-                "APPROX_SGLANG_SQ_ARTIFACT_PATH": os.environ["APPROX_SGLANG_SQ_ARTIFACT_PATH"],
-                "APPROX_SGLANG_SQ_ALPHA": os.environ.get("APPROX_SGLANG_SQ_ALPHA", "0.85"),
-                "APPROX_SGLANG_SQ_GROUP_SIZE": os.environ.get("APPROX_SGLANG_SQ_GROUP_SIZE", "128"),
-                "APPROX_SGLANG_SQ_BLOCK_K": os.environ.get("APPROX_SGLANG_SQ_BLOCK_K", "64"),
+                **_w4_common,
             },
         )
     )
@@ -85,14 +90,59 @@ if os.environ.get("APPROX_SGLANG_SQ_ARTIFACT_PATH"):
                 "APPROX_SGLANG_MODE": "approx",
                 "APPROX_SGLANG_TARGET": "gate_up_proj",
                 "APPROX_SGLANG_BACKEND": "triton_awq_w4a16",
-                "APPROX_SGLANG_USE_SUBSTITUTE": "1",
-                "APPROX_SGLANG_SQ_ARTIFACT_PATH": os.environ["APPROX_SGLANG_SQ_ARTIFACT_PATH"],
-                "APPROX_SGLANG_SQ_GROUP_SIZE": os.environ.get("APPROX_SGLANG_SQ_GROUP_SIZE", "128"),
-                "APPROX_SGLANG_SQ_BLOCK_K": os.environ.get("APPROX_SGLANG_SQ_BLOCK_K", "64"),
-                "APPROX_SGLANG_AWQ_GRID_SIZE": os.environ.get("APPROX_SGLANG_AWQ_GRID_SIZE", "20"),
+                **_w4_common,
+                "APPROX_SGLANG_AWQ_GRID_SIZE": os.environ.get(
+                    "APPROX_SGLANG_AWQ_GRID_SIZE", "20"
+                ),
             },
         )
     )
+    if os.environ.get("APPROX_SGLANG_INCLUDE_MIXED_CASES", "0") == "1":
+        _CASES.extend(
+            [
+                (
+                    "mixed_gate_w8_qkv_sq_w4a16",
+                    {
+                        "APPROX_SGLANG_QUANT": "1",
+                        "APPROX_SGLANG_MODE": "approx",
+                        "APPROX_SGLANG_MIXED_BACKENDS": (
+                            "gate_up_proj=triton_w8a16,qkv_proj=triton_sq_w4a16"
+                        ),
+                        **_w4_common,
+                    },
+                ),
+                (
+                    "mixed_gate_w8_qkv_awq_w4a16",
+                    {
+                        "APPROX_SGLANG_QUANT": "1",
+                        "APPROX_SGLANG_MODE": "approx",
+                        "APPROX_SGLANG_MIXED_BACKENDS": (
+                            "gate_up_proj=triton_w8a16,qkv_proj=triton_awq_w4a16"
+                        ),
+                        **_w4_common,
+                        "APPROX_SGLANG_AWQ_GRID_SIZE": os.environ.get(
+                            "APPROX_SGLANG_AWQ_GRID_SIZE", "20"
+                        ),
+                    },
+                ),
+                (
+                    "mixed_gate_qkv_awq_w4a16_bk32",
+                    {
+                        "APPROX_SGLANG_QUANT": "1",
+                        "APPROX_SGLANG_MODE": "approx",
+                        "APPROX_SGLANG_MIXED_BACKENDS": (
+                            "gate_up_proj=triton_awq_w4a16,"
+                            "qkv_proj=triton_awq_w4a16"
+                        ),
+                        **_w4_common,
+                        "APPROX_SGLANG_SQ_BLOCK_K": "32",
+                        "APPROX_SGLANG_AWQ_GRID_SIZE": os.environ.get(
+                            "APPROX_SGLANG_AWQ_GRID_SIZE", "20"
+                        ),
+                    },
+                ),
+            ]
+        )
 
 if os.environ.get("APPROX_SGLANG_INCLUDE_DROP_CASES", "0") == "1":
     _CASES.extend(

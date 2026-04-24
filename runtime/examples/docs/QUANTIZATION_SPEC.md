@@ -56,14 +56,15 @@ The useful path today is still `APPROX_SGLANG_BACKEND=triton_w8a16`.
 The new lower-bit path is:
 
 - `APPROX_SGLANG_BACKEND=triton_sq_w4a16`
+- `APPROX_SGLANG_BACKEND=triton_awq_w4a16`
 
-This is not a naive int4 path. It is a SmoothQuant-style calibrated `W4A16`
-flow with:
+These are not naive int4 paths. They are calibrated `W4A16` flows with:
 
 - offline activation-stat collection on targeted linear layers
-- smoothing-factor computation from activation and weight statistics
+- SmoothQuant or AWQ-style scale computation from activation and weight
+  statistics
 - one-time load-time packing into group-wise int4 weights
-- online activation-side inverse smoothing inside the Triton kernel
+- online activation-side inverse scaling inside the Triton kernel
 
 It is weight-only at runtime:
 
@@ -123,6 +124,20 @@ For `triton_sq_w4a16`, that ABI is:
 - packed int4 weight
 - group-wise scale tensor
 - activation smoothing inverse vector
+
+Mixed W4/W8 precision does not add another kernel ABI. In the current runtime
+example it is a per-site binding plan:
+
+```text
+APPROX_SGLANG_MIXED_BACKENDS=gate_up_proj=triton_w8a16,qkv_proj=triton_awq_w4a16
+```
+
+The runtime patch chooses a backend by matching these rules against each SGLang
+layer prefix. The SGLang child-process bootstrap then installs a composite
+approxMLIR stages hook that delegates to the existing same-ABI substitution
+hook for every backend kernel family present in the plan. W4-selected sites
+still require SQ/AWQ calibration artifacts; sites without usable artifacts fall
+back to the original SGLang linear path.
 
 What this proves:
 
@@ -220,6 +235,11 @@ Latency points:
 - `gate_up_proj` `triton_w8a16`: median about `0.176s` (`~1.15x`)
 - decode-tiled `gate_up_proj` `triton_sq_w4a16`: median about `0.136s`
   (`~1.48x` vs exact, `~1.29x` vs W8)
+- mixed `gate_up_proj=triton_w8a16,qkv_proj=triton_awq_w4a16`: median about
+  `0.151s` in a two-measurement smoke probe, with `90/90` substitution hits
+- tuned selective AWQ-W4 on `gate_up_proj,qkv_proj` with `SQ_BLOCK_K=32`:
+  median about `0.137s` in a five-measurement probe, with `90/90`
+  substitution hits
 
 Decode-step logprob accuracy:
 
@@ -237,6 +257,16 @@ Decode-step logprob accuracy:
   - `teacher_forced_mean_logprob_delta = -0.14578`
   - `top1_agreement_rate = 0.875`
   - `topk_js_mean = 0.009500`
+- mixed W8/AWQ-W4 smoke
+  - `teacher_forced_perplexity_ratio = 0.9854`
+  - `teacher_forced_mean_logprob_delta = 0.01467`
+  - `top1_agreement_rate = 1.000`
+  - `topk_js_mean = 0.000882`
+- tuned selective AWQ-W4 on `gate_up_proj,qkv_proj`
+  - `teacher_forced_perplexity_ratio = 0.9791`
+  - `teacher_forced_mean_logprob_delta = 0.02111`
+  - `top1_agreement_rate = 1.000`
+  - `topk_js_mean = 0.003658`
 
 Interpretation:
 
@@ -255,6 +285,11 @@ The current frontier is selective coverage:
 
 - `gate_up_proj` W8A16 is the best target so far
 - `qkv_proj` W8A16 gives a smaller positive point
+- mixed W8/AWQ-W4 can be tested without new kernels by binding different
+  prefixes to existing backend families through `APPROX_SGLANG_MIXED_BACKENDS`
+- selective AWQ-W4 on `gate_up_proj,qkv_proj` is the fastest tuned W4 point so
+  far; `APPROX_SGLANG_SQ_BLOCK_K=32` is the current best W4 tile setting for
+  that policy
 - `down_proj` is not a Pareto point with the current W8A16 kernel
 - `triton_sq_w4a16` full coverage is not a Pareto point with the current W4
   kernel

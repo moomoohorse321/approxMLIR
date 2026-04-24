@@ -63,6 +63,10 @@ Useful environment variables:
 - `APPROX_SGLANG_BACKEND`: `triton_w8a16`, `triton_sq_w4a16`,
   `triton_awq_w4a16`,
   `triton_prequant`, `triton`, or `sgl_kernel`
+- `APPROX_SGLANG_MIXED_BACKENDS`: comma-separated `target=backend` rules for
+  mixed precision, for example
+  `gate_up_proj=triton_w8a16,qkv_proj=triton_awq_w4a16`; when set, this
+  supersedes `APPROX_SGLANG_TARGET` and `APPROX_SGLANG_BACKEND`
 - `APPROX_SGLANG_DECODE_ONLY`: only patch M=1 decode calls, default `1`
 - `APPROX_SGLANG_USE_SUBSTITUTE`: set `1` to run approxMLIR function
   substitution on the selected Triton kernel
@@ -116,6 +120,46 @@ APPROX_SGLANG_AWQ_GRID_SIZE=20 \
 python3 approxMLIR/runtime/examples/sglang_quant/probe_sglang_triton_dump.py
 ```
 
+Mixed precision is expressed as a runtime binding plan, not as a new kernel
+family. The current implementation reuses the existing W8A16 and W4A16 kernels
+and installs one approxMLIR function-substitution hook per backend kernel that
+appears in `APPROX_SGLANG_MIXED_BACKENDS`.
+
+Example W8/W4 mix:
+
+```bash
+APPROX_SGLANG_QUANT=1 \
+APPROX_SGLANG_MODE=approx \
+APPROX_SGLANG_MIXED_BACKENDS=gate_up_proj=triton_w8a16,qkv_proj=triton_awq_w4a16 \
+APPROX_SGLANG_USE_SUBSTITUTE=1 \
+APPROX_SGLANG_SQ_ARTIFACT_PATH=/tmp/approx_sq_cal_gq/sq_artifact.pt \
+APPROX_SGLANG_SQ_GROUP_SIZE=128 \
+APPROX_SGLANG_SQ_BLOCK_K=64 \
+APPROX_SGLANG_AWQ_GRID_SIZE=20 \
+python3 approxMLIR/runtime/examples/sglang_quant/probe_sglang_triton_dump.py
+```
+
+The best tuned selective W4 point found so far moves both `gate_up_proj` and
+`qkv_proj` to AWQ-W4 and uses a smaller W4 K tile:
+
+```bash
+APPROX_SGLANG_QUANT=1 \
+APPROX_SGLANG_MODE=approx \
+APPROX_SGLANG_MIXED_BACKENDS=gate_up_proj=triton_awq_w4a16,qkv_proj=triton_awq_w4a16 \
+APPROX_SGLANG_USE_SUBSTITUTE=1 \
+APPROX_SGLANG_SQ_ARTIFACT_PATH=/tmp/approx_sq_cal_gq/sq_artifact.pt \
+APPROX_SGLANG_SQ_GROUP_SIZE=128 \
+APPROX_SGLANG_SQ_BLOCK_K=32 \
+APPROX_SGLANG_AWQ_GRID_SIZE=20 \
+python3 approxMLIR/runtime/examples/sglang_quant/probe_sglang_triton_dump.py
+```
+
+Rules are matched in order against the SGLang layer prefix; `all=...` is
+accepted. Backends `exact`, `none`, `original`, `fp`, `fp16`, and `bf16` leave a
+matching site on the original SGLang linear path. W4 rules require the SQ/AWQ
+artifact to contain the matched layer prefix; otherwise that site falls back to
+the original path and records a skip event.
+
 Current Qwen3.5-2B result on the RTX 4060 Laptop, batch=4, 8 generated tokens,
 CUDA graph enabled:
 
@@ -127,6 +171,11 @@ CUDA graph enabled:
 - `gate_up_proj` SmoothQuant-style W4A16 decode-only, group size `128`,
   block size `64`: about `0.194s` (`1.05x`) with checked-output match on
   the probe prompt
+- mixed `gate_up_proj=triton_w8a16,qkv_proj=triton_awq_w4a16`, using a
+  gate/qkv calibration artifact: about `0.151s` in a two-measurement smoke
+  probe, with `90/90` substitution hits
+- tuned selective AWQ-W4 on `gate_up_proj,qkv_proj` with `SQ_BLOCK_K=32`:
+  about `0.137s` in a five-measurement probe, with `90/90` substitution hits
 
 The practical frontier is selective, not maximum coverage. `gate_up_proj` is
 the current useful target; `down_proj` regresses because the W8A16 kernel is not
@@ -138,3 +187,10 @@ same online kernel and decode-tiled layout, but a different load-time
 activation-aware group-wise W4 quantizer. CUDA graph must be enabled for
 serving-like numbers, otherwise launch overhead dominates and the same
 replacement can look flat or negative.
+
+For the mixed W8/AWQ-W4 smoke above, the decode-step logprob probe over 32
+scored tokens reported `top1_agreement_rate=1.0`,
+`teacher_forced_perplexity_ratio=0.9854`, and `topk_js_mean=0.000882`.
+For the tuned selective AWQ-W4 policy, the same probe shape reported
+`top1_agreement_rate=1.0`, `teacher_forced_perplexity_ratio=0.9791`, and
+`topk_js_mean=0.00366`.

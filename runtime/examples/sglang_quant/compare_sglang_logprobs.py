@@ -18,6 +18,20 @@ APPROXMLIR_DIR = RUNTIME_DIR.parent
 REPO_ROOT = APPROXMLIR_DIR.parent
 LOCAL_TRITON_PYTHON = REPO_ROOT / "triton" / "python"
 BOOTSTRAP_DIR = EXAMPLES_DIR / "bootstrap"
+APPROX_ENV_KEYS_FOR_EXACT = (
+    "APPROX_SGLANG_MODE",
+    "APPROX_SGLANG_TARGET",
+    "APPROX_SGLANG_BACKEND",
+    "APPROX_SGLANG_MIXED_BACKENDS",
+    "APPROX_SGLANG_USE_SUBSTITUTE",
+    "APPROX_SGLANG_DUMP_OUT_DIR",
+    "APPROX_SGLANG_SQ_ARTIFACT_PATH",
+    "APPROX_SGLANG_SQ_ALPHA",
+    "APPROX_SGLANG_SQ_GROUP_SIZE",
+    "APPROX_SGLANG_SQ_BLOCK_K",
+    "APPROX_SGLANG_AWQ_GRID_SIZE",
+    "APPROX_SGLANG_BLOCK_N",
+)
 
 
 def _child_pythonpath() -> str:
@@ -292,13 +306,8 @@ def _run_child(worker_mode: str, payload_path: str, quant_enabled: bool) -> dict
         env["APPROX_SGLANG_QUANT"] = "1"
     else:
         env["APPROX_SGLANG_QUANT"] = "0"
-        env.pop("APPROX_SGLANG_MODE", None)
-        env.pop("APPROX_SGLANG_TARGET", None)
-        env.pop("APPROX_SGLANG_BACKEND", None)
-        env.pop("APPROX_SGLANG_SQ_ARTIFACT_PATH", None)
-        env.pop("APPROX_SGLANG_SQ_GROUP_SIZE", None)
-        env.pop("APPROX_SGLANG_SQ_BLOCK_K", None)
-        env.pop("APPROX_SGLANG_BLOCK_N", None)
+        for key in APPROX_ENV_KEYS_FOR_EXACT:
+            env.pop(key, None)
     subprocess.run(
         [sys.executable, str(THIS_FILE), "--worker", worker_mode, payload_path],
         check=True,

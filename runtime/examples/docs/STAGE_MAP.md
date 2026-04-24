@@ -22,6 +22,8 @@ path:
   - monkeypatches SGLang linear layers at runtime
   - prequantizes selected weights outside the kernel
   - redirects selected call sites to the Triton quantized kernels
+  - supports per-prefix mixed W8/W4 backend plans through
+    `APPROX_SGLANG_MIXED_BACKENDS`
 
 - `sglang_quant/approx_kernels.py`
   - Triton W8A16/W8A8 kernels and same-ABI substitute kernels

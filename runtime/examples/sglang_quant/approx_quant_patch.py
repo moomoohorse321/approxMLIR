@@ -30,6 +30,12 @@ from pathlib import Path
 import torch
 from torch.nn.parameter import Parameter
 
+from mixed_backend_config import (
+    W4_BACKENDS as _W4_BACKENDS,
+    backend_or_none as _backend_or_none,
+    parse_mixed_backend_rules as _parse_mixed_backend_rules,
+)
+
 
 def _enabled() -> bool:
     return os.environ.get("APPROX_SGLANG_QUANT", "0") == "1"
@@ -49,6 +55,7 @@ class _Config:
     mode: str
     target: str
     backend: str
+    mixed_backend_rules: tuple[tuple[str, str], ...]
     decode_only: bool
     use_substitute: bool
     drop_weight: bool
@@ -65,6 +72,9 @@ class _Config:
             mode=os.environ.get("APPROX_SGLANG_MODE", "exact"),
             target=os.environ.get("APPROX_SGLANG_TARGET", "proj"),
             backend=os.environ.get("APPROX_SGLANG_BACKEND", "triton"),
+            mixed_backend_rules=_parse_mixed_backend_rules(
+                os.environ.get("APPROX_SGLANG_MIXED_BACKENDS", "")
+            ),
             decode_only=os.environ.get("APPROX_SGLANG_DECODE_ONLY", "1") == "1",
             use_substitute=os.environ.get("APPROX_SGLANG_USE_SUBSTITUTE", "0") == "1",
             drop_weight=os.environ.get("APPROX_SGLANG_DROP_ORIGINAL_WEIGHT", "0") == "1",
@@ -76,11 +86,27 @@ class _Config:
             awq_grid_size=int(os.environ.get("APPROX_SGLANG_AWQ_GRID_SIZE", "20")),
         )
 
+    def backend_for_prefix(self, prefix: str) -> str | None:
+        if self.mixed_backend_rules:
+            for target, backend in self.mixed_backend_rules:
+                if target == "all" or (target and target in prefix):
+                    return _backend_or_none(backend)
+            return None
+        if self.target == "all" or any(
+            tok and tok in prefix for tok in self.target.split(",")
+        ):
+            return _backend_or_none(self.backend)
+        return None
+
+    def backend_for_layer(self, layer: torch.nn.Module) -> str | None:
+        return self.backend_for_prefix(getattr(layer, "prefix", ""))
+
     def target_match(self, layer: torch.nn.Module) -> bool:
-        prefix = getattr(layer, "prefix", "")
-        if self.target == "all":
-            return True
-        return any(tok and tok in prefix for tok in self.target.split(","))
+        return self.backend_for_layer(layer) is not None
+
+    def needs_sq_stats(self, layer: torch.nn.Module) -> bool:
+        backend = self.backend_for_layer(layer)
+        return backend in _W4_BACKENDS
 
 
 def _block_dims(default_n: int, default_k: int = 64) -> tuple[int, int]:
@@ -200,7 +226,7 @@ def _install() -> None:
         atexit.register(_flush_sq_stats)
 
     def _collect_sq_stats(layer: torch.nn.Module, x2d: torch.Tensor) -> None:
-        if not cfg.sq_collect or not cfg.target_match(layer):
+        if not cfg.sq_collect or not cfg.needs_sq_stats(layer):
             return
         if torch.cuda.is_current_stream_capturing():
             return
@@ -244,12 +270,15 @@ def _install() -> None:
         )
         return sq_artifact_layers
 
-    def _prepared_weight_name() -> str:
-        if cfg.backend in ("triton_sq_w4a16", "triton_awq_w4a16"):
+    def _prepared_weight_name(backend: str) -> str:
+        if backend in _W4_BACKENDS:
             return "_approx_sq_qweight_i4_t_packed"
         return "_approx_qweight_i8_t"
 
     def prepare_weight(layer: torch.nn.Module, event: str = "prepare_weight") -> bool:
+        backend = cfg.backend_for_layer(layer)
+        if backend is None:
+            return False
         weight = getattr(layer, "weight", None)
         if (
             weight is None
@@ -260,9 +289,9 @@ def _install() -> None:
             return False
 
         prefix = getattr(layer, "prefix", "")
-        qweight_name = _prepared_weight_name()
+        qweight_name = _prepared_weight_name(backend)
         extra_record: dict[str, object] = {}
-        if cfg.backend in ("triton_sq_w4a16", "triton_awq_w4a16"):
+        if backend in _W4_BACKENDS:
             sq_layers = _load_sq_artifact_layers()
             act_absmax = None if sq_layers is None else sq_layers.get(prefix)
             if act_absmax is None:
@@ -275,7 +304,7 @@ def _install() -> None:
                 )
                 return False
             try:
-                if cfg.backend == "triton_sq_w4a16":
+                if backend == "triton_sq_w4a16":
                     q, scale_g, smooth_inv = smoothquant_quantize_weight_i4_groupwise_packed(
                         weight.data,
                         torch.as_tensor(act_absmax),
@@ -387,7 +416,7 @@ def _install() -> None:
                 "qweight_shape": list(q.shape),
                 "qweight_stride": list(q.stride()),
                 "qweight_bits": qweight_bits,
-                "backend": cfg.backend,
+                "backend": backend,
                 "dtype": str(weight.dtype),
                 **extra_record,
             }
@@ -488,7 +517,7 @@ def _install() -> None:
             substitute_name="approx_sglang_w8a16_linear_kernel_1",
         )
 
-    def _apply_sq_w4a16(layer, x2d, x_shape, bias):
+    def _apply_sq_w4a16(layer, x2d, x_shape, bias, backend_name: str):
         import triton
 
         generic_bq = layer._approx_sq_qweight_i4_t_packed
@@ -555,7 +584,6 @@ def _install() -> None:
             GROUP_K=cfg.sq_group_size,
             DECODE_TILE_LAYOUT=1 if use_decode_tiled else 0,
         )
-        backend_name = cfg.backend if cfg.backend in ("triton_sq_w4a16", "triton_awq_w4a16") else "triton_sq_w4a16"
         shape_key = (
             backend_name,
             str(x2d.dtype),
@@ -775,10 +803,16 @@ def _install() -> None:
     }
 
     def apply(self, layer, x, bias=None):
-        is_target = cfg.target_match(layer)
+        backend = cfg.backend_for_layer(layer)
+        is_target = backend is not None
         x_shape = None
         x2d = None
-        if cfg.sq_collect and is_target and x.dtype in (torch.float16, torch.bfloat16) and x.is_cuda:
+        if (
+            cfg.sq_collect
+            and cfg.needs_sq_stats(layer)
+            and x.dtype in (torch.float16, torch.bfloat16)
+            and x.is_cuda
+        ):
             x_shape = tuple(x.shape)
             x2d = x.reshape(-1, x_shape[-1]).contiguous()
             _collect_sq_stats(layer, x2d)
@@ -791,14 +825,24 @@ def _install() -> None:
             x_shape = tuple(x.shape)
             x2d = x.reshape(-1, x_shape[-1]).contiguous()
 
-        qweight_name = getattr(layer, "_approx_qweight_name", _prepared_weight_name())
-        if not hasattr(layer, qweight_name) and not prepare_weight(layer, "prepare_weight_lazy"):
+        qweight_name = getattr(
+            layer,
+            "_approx_qweight_name",
+            _prepared_weight_name(backend),
+        )
+        if not hasattr(layer, qweight_name) and not prepare_weight(
+            layer,
+            "prepare_weight_lazy",
+        ):
             return original_apply(self, layer, x, bias)
         if cfg.decode_only and x2d.shape[0] != 1:
             return original_apply(self, layer, x, bias)
 
-        backend_fn = _BACKENDS.get(cfg.backend, _apply_dynamic_w8a8)
-        result = backend_fn(layer, x2d, x_shape, bias)
+        if backend in _W4_BACKENDS:
+            result = _apply_sq_w4a16(layer, x2d, x_shape, bias, backend)
+        else:
+            backend_fn = _BACKENDS.get(backend, _apply_dynamic_w8a8)
+            result = backend_fn(layer, x2d, x_shape, bias)
         if result is None:
             return original_apply(self, layer, x, bias)
         return result
