@@ -3,6 +3,10 @@
 This document describes the current SGLang-based quantization mainline in
 `approxMLIR/runtime/examples`.
 
+For the proposed future compiler/runtime contract, see
+`QUANTIZATION_APPROXMLIR_INTEGRATION_SPEC.md`. That document is a design
+proposal, not the current implementation contract.
+
 ## Current Goal
 
 The active goal is a real serving-style accuracy/performance frontier:

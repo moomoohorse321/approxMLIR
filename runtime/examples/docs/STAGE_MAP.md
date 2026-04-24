@@ -42,23 +42,12 @@ The useful PoC target is Qwen3.5-2B with SGLang CUDA graph enabled:
 This is a selective-coverage frontier. `gate_up_proj` is the useful target;
 adding `down_proj` is not a Pareto point with the current kernel.
 
-## Side Paths
+## Retired Material
 
-These files are support tools, not the active implementation:
-
-- `sidepaths/stage2a_regime_characterizer.py`
-  - decode-regime characterization for direct Triton shapes
-
-- `sidepaths/stage2a_fastpath_probe.py`
-  - microbenchmark for checking whether a candidate kernel reaches a fast path
-
-- `sidepaths/dump_qwen_ttir.py`
-  - old Stage 1 Qwen TTIR observation tool
-
-- `sidepaths/dump_triton_kernels.py`
-  - direct Triton kernel dump harness
+The old direct-Triton and TorchInductor side-path probes were removed from the
+current runtime examples. They were useful during early target discovery, but
+they are not part of the SGLang quantization mainline or its verification path.
 
 For more detail, see:
 
 - `QUANTIZATION_SPEC.md`
-- `SIDEPATHS.md`
