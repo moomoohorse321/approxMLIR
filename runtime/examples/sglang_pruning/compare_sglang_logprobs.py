@@ -16,7 +16,7 @@ EXAMPLES_DIR = THIS_FILE.parent
 RUNTIME_DIR = EXAMPLES_DIR.parent.parent
 APPROXMLIR_DIR = RUNTIME_DIR.parent
 REPO_ROOT = APPROXMLIR_DIR.parent
-LOCAL_TRITON_PYTHON = REPO_ROOT / "triton" / "python"
+LOCAL_TRITON_PYTHON = Path(os.environ.get("APPROX_SOURCE_TRITON_PYTHON", str(REPO_ROOT / "triton" / "python")))
 BOOTSTRAP_DIR = EXAMPLES_DIR / "bootstrap"
 
 
@@ -33,29 +33,56 @@ def _child_pythonpath() -> str:
     return ":".join(parts)
 
 
+def _set_child_compiler_env(env: dict[str, str]) -> None:
+    python_prefix = Path(sys.executable).resolve().parents[1]
+    conda_gcc = python_prefix / "bin" / "x86_64-conda-linux-gnu-gcc"
+    conda_gxx = python_prefix / "bin" / "x86_64-conda-linux-gnu-g++"
+    if conda_gcc.exists() and conda_gxx.exists():
+        env.setdefault("CC", str(conda_gcc))
+        env.setdefault("CXX", str(conda_gxx))
+        env.setdefault("CUDAHOSTCXX", str(conda_gxx))
+
+
 def _engine_kwargs() -> dict:
     kwargs = {
-        "model_path": os.environ.get("MODEL_PATH", "Qwen/Qwen3.5-2B"),
+        "model_path": os.environ.get("MODEL_PATH", "Qwen/Qwen2.5-0.5B-Instruct"),
         "attention_backend": os.environ.get("ATTENTION_BACKEND", "triton"),
         "sampling_backend": os.environ.get("SAMPLING_BACKEND", "pytorch"),
         "disable_cuda_graph": os.environ.get("SGLANG_DISABLE_CUDA_GRAPH", "0") == "1",
+        "disable_piecewise_cuda_graph": os.environ.get("SGLANG_DISABLE_PIECEWISE_CUDA_GRAPH", "1") == "1",
+        "disable_overlap_schedule": os.environ.get("SGLANG_DISABLE_OVERLAP_SCHEDULE", "1") == "1",
+        "disable_radix_cache": os.environ.get("SGLANG_DISABLE_RADIX_CACHE", "0") == "1",
         "log_level": "error",
     }
     mem_fraction = os.environ.get("SGLANG_MEM_FRACTION_STATIC")
     if mem_fraction:
         kwargs["mem_fraction_static"] = float(mem_fraction)
-    if os.environ.get("SGLANG_DISABLE_PIECEWISE_CUDA_GRAPH"):
-        kwargs["disable_piecewise_cuda_graph"] = (
-            os.environ.get("SGLANG_DISABLE_PIECEWISE_CUDA_GRAPH", "0") == "1"
-        )
     return kwargs
+
+
+def _default_prompt() -> str:
+    prompt = os.environ.get("PROMPT")
+    if prompt:
+        return prompt
+    repeat = int(os.environ.get("LONG_PROMPT_REPEAT", "0"))
+    if repeat <= 0:
+        return "The capital of France is"
+    paragraph = (
+        "Approximate compilation keeps program semantics visible while allowing "
+        "carefully bounded transformations across linear algebra kernels, runtime "
+        "management, and backend lowering. "
+    )
+    return paragraph * repeat
 
 
 def _prompts() -> list[str]:
     prompts = json.loads(os.environ.get("PROMPTS_JSON", "null") or "null")
     if prompts:
         return prompts
-    prompt = os.environ.get("PROMPT", "The capital of France is")
+    prompt = _default_prompt()
+    copies = int(os.environ.get("ACCURACY_PROMPT_COPIES", "0"))
+    if copies > 0:
+        return [prompt] * copies
     batch_size = int(os.environ.get("BATCH_SIZE", "1"))
     return [prompt] * batch_size
 
@@ -168,7 +195,7 @@ def _run_worker(mode: str, payload_path: str) -> int:
     from sglang.srt.utils.hf_transformers_utils import get_tokenizer
 
     prompts = _prompts()
-    model_path = os.environ.get("MODEL_PATH", "Qwen/Qwen3.5-2B")
+    model_path = os.environ.get("MODEL_PATH", "Qwen/Qwen2.5-0.5B-Instruct")
     max_new_tokens = int(os.environ.get("MAX_NEW_TOKENS", "8"))
     topk = int(os.environ.get("TOP_LOGPROBS_NUM", "20"))
     sampling_seed = int(os.environ.get("SAMPLING_SEED", "0"))
@@ -184,16 +211,21 @@ def _run_worker(mode: str, payload_path: str) -> int:
                 "ignore_eos": True,
                 "sampling_seed": sampling_seed,
             }
-            results = _normalize_results(
-                engine.generate(
-                    input_ids=prompt_ids,
-                    sampling_params=sampling_params,
-                    return_logprob=True,
-                    top_logprobs_num=topk,
+            results = []
+            for prompt_id in prompt_ids:
+                results.extend(
+                    _normalize_results(
+                        engine.generate(
+                            input_ids=[prompt_id],
+                            sampling_params=sampling_params,
+                            return_logprob=True,
+                            top_logprobs_num=topk,
+                        )
+                    )
                 )
-            )
             payload = {
                 "prompt_ids": prompt_ids,
+                "prompt_lengths": [len(ids) for ids in prompt_ids],
                 "outputs": [
                     {
                         "text": result["text"],
@@ -248,34 +280,43 @@ def _run_worker(mode: str, payload_path: str) -> int:
                         }
                     )
             else:
-                eval_input_ids = [
-                    prompt + output["output_ids"]
-                    for prompt, output in zip(prompt_ids, ref_data["outputs"])
-                ]
-                results = _normalize_results(
-                    engine.generate(
-                        input_ids=eval_input_ids,
-                        sampling_params={
-                            "temperature": 0.0,
-                            "max_new_tokens": 0,
-                            "ignore_eos": True,
-                            "sampling_seed": sampling_seed,
-                        },
-                        return_logprob=True,
-                        logprob_start_len=0,
-                        top_logprobs_num=topk,
-                    )
-                )
-                for result, ref_output in zip(results, ref_data["outputs"]):
-                    seq_len = len(ref_output["output_ids"])
-                    raw_input_token_logprobs = result["meta_info"]["input_token_logprobs"][1:]
-                    raw_input_top_logprobs = result["meta_info"].get("input_top_logprobs", [])[1:]
-                    input_token_logprobs = _lp_only(raw_input_token_logprobs)
-                    input_top_logprobs = _topk_only(raw_input_top_logprobs)
+                chunk_tokens = int(os.environ.get("SCORE_CHUNK_TOKENS", "64"))
+                for prompt, ref_output in zip(prompt_ids, ref_data["outputs"]):
+                    ref_output_ids = ref_output["output_ids"]
+                    continuation_lps = []
+                    continuation_topk = []
+                    if chunk_tokens <= 0 or chunk_tokens >= len(ref_output_ids):
+                        chunks = [(0, ref_output_ids)]
+                    else:
+                        chunks = [
+                            (start, ref_output_ids[start : start + chunk_tokens])
+                            for start in range(0, len(ref_output_ids), chunk_tokens)
+                        ]
+                    for start, chunk in chunks:
+                        prefix_ids = prompt + ref_output_ids[:start]
+                        eval_input_ids = prefix_ids + chunk
+                        result = _normalize_results(
+                            engine.generate(
+                                input_ids=[eval_input_ids],
+                                sampling_params={
+                                    "temperature": 0.0,
+                                    "max_new_tokens": 0,
+                                    "ignore_eos": True,
+                                    "sampling_seed": sampling_seed,
+                                },
+                                return_logprob=True,
+                                logprob_start_len=max(0, len(prefix_ids) - 1),
+                                top_logprobs_num=topk,
+                            )
+                        )[0]
+                        raw_input_token_logprobs = result["meta_info"]["input_token_logprobs"][1:]
+                        raw_input_top_logprobs = result["meta_info"].get("input_top_logprobs", [])[1:]
+                        continuation_lps.extend(_lp_only(raw_input_token_logprobs)[-len(chunk):])
+                        continuation_topk.extend(_topk_only(raw_input_top_logprobs)[-len(chunk):])
                     scored.append(
                         {
-                            "continuation_token_logprobs": input_token_logprobs[-seq_len:],
-                            "continuation_top_logprobs": input_top_logprobs[-seq_len:],
+                            "continuation_token_logprobs": continuation_lps,
+                            "continuation_top_logprobs": continuation_topk,
                         }
                     )
             payload = {"scored": scored, "evaluation_mode": "stepwise_decode" if decode_only else "prefill_teacher_forced"}
@@ -288,21 +329,26 @@ def _run_worker(mode: str, payload_path: str) -> int:
     return 0
 
 
-def _run_child(worker_mode: str, payload_path: str, quant_enabled: bool) -> dict:
+def _run_child(worker_mode: str, payload_path: str, pruning_enabled: bool) -> dict:
     env = os.environ.copy()
     env["PYTHONPATH"] = _child_pythonpath()
     env["SGLANG_DISABLE_CUDA_GRAPH"] = os.environ.get("SGLANG_DISABLE_CUDA_GRAPH", "0")
-    if quant_enabled:
-        env["APPROX_SGLANG_QUANT"] = "1"
+    env["SGLANG_DISABLE_PIECEWISE_CUDA_GRAPH"] = os.environ.get("SGLANG_DISABLE_PIECEWISE_CUDA_GRAPH", "1")
+    env["SGLANG_DISABLE_OVERLAP_SCHEDULE"] = os.environ.get("SGLANG_DISABLE_OVERLAP_SCHEDULE", "1")
+    env["SGLANG_DISABLE_RADIX_CACHE"] = os.environ.get("SGLANG_DISABLE_RADIX_CACHE", "0")
+    _set_child_compiler_env(env)
+    if pruning_enabled:
+        env["APPROX_SGLANG_PRUNING"] = "1"
+        env["APPROX_SGLANG_MODE"] = "approx"
     else:
-        env["APPROX_SGLANG_QUANT"] = "0"
+        env["APPROX_SGLANG_PRUNING"] = "0"
         env.pop("APPROX_SGLANG_MODE", None)
         env.pop("APPROX_SGLANG_TARGET", None)
         env.pop("APPROX_SGLANG_BACKEND", None)
-        env.pop("APPROX_SGLANG_SQ_ARTIFACT_PATH", None)
-        env.pop("APPROX_SGLANG_SQ_GROUP_SIZE", None)
-        env.pop("APPROX_SGLANG_SQ_BLOCK_K", None)
+        env.pop("APPROX_SGLANG_PRUNE_BACKEND", None)
+        env.pop("APPROX_SGLANG_PRUNE_SPARSITY", None)
         env.pop("APPROX_SGLANG_BLOCK_N", None)
+        env.pop("APPROX_SGLANG_BLOCK_K", None)
     subprocess.run(
         [sys.executable, str(THIS_FILE), "--worker", worker_mode, payload_path],
         check=True,
@@ -324,10 +370,10 @@ def main() -> int:
         exact_score_path = str(tmpdir / "exact_score.json")
         approx_score_path = str(tmpdir / "approx_score.json")
 
-        ref = _run_child("generate_ref", ref_path, quant_enabled=False)
+        ref = _run_child("generate_ref", ref_path, pruning_enabled=False)
         os.environ["REFERENCE_PAYLOAD_PATH"] = ref_path
-        exact_score = _run_child("score_ref", exact_score_path, quant_enabled=False)
-        approx_score = _run_child("score_ref", approx_score_path, quant_enabled=True)
+        exact_score = _run_child("score_ref", exact_score_path, pruning_enabled=False)
+        approx_score = _run_child("score_ref", approx_score_path, pruning_enabled=True)
 
         exact_logprobs = [
             item["continuation_token_logprobs"] for item in exact_score["scored"]
@@ -350,14 +396,31 @@ def main() -> int:
 
         summary = {
             "evaluation_mode": exact_score.get("evaluation_mode", "unknown"),
-            "model_path": os.environ.get("MODEL_PATH", "Qwen/Qwen3.5-2B"),
+            "model_path": os.environ.get("MODEL_PATH", "Qwen/Qwen2.5-0.5B-Instruct"),
             "num_prompts": len(ref["prompt_ids"]),
+            "prompt_lengths": ref.get("prompt_lengths", [len(ids) for ids in ref["prompt_ids"]]),
             "max_new_tokens": int(os.environ.get("MAX_NEW_TOKENS", "8")),
             "top_logprobs_num": int(os.environ.get("TOP_LOGPROBS_NUM", "20")),
             "reference_texts": [item["text"] for item in ref["outputs"]],
             "reference_output_lengths": [len(item["output_ids"]) for item in ref["outputs"]],
             "metrics": metrics,
         }
+        min_scored_tokens = int(os.environ.get("MIN_ACCURACY_TARGET_TOKENS", "0"))
+        if min_scored_tokens and metrics["num_scored_tokens"] < min_scored_tokens:
+            summary["failed_reason"] = (
+                f"num_scored_tokens={metrics['num_scored_tokens']} "
+                f"< MIN_ACCURACY_TARGET_TOKENS={min_scored_tokens}"
+            )
+            out_path = os.environ.get("ACCURACY_OUTPUT_PATH")
+            if out_path:
+                Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+                Path(out_path).write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+            print(json.dumps(summary, indent=2, sort_keys=True))
+            return 6
+        out_path = os.environ.get("ACCURACY_OUTPUT_PATH")
+        if out_path:
+            Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(out_path).write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
         print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # probe_sglang_triton_dump.py
 #
-# Mainline SGLang + Triton quantization driver. A single run does one
+# Mainline SGLang + Triton pruning driver. A single run does one
 # SGLang generation pass, collects Triton TTIR dumps via the approx_runtime
 # stage-inspection hook, and emits JSONL/JSON summaries that the sweep
-# driver (sweep_sglang_quant.py) parses for case-level medians and
+# driver (sweep_sglang_pruning.py) parses for case-level medians and
 # substitution stats.
 #
 # This file intentionally does only the "one measurement" job — no case
@@ -18,7 +18,7 @@
 #   3) `_install_dump_hook`      — register the stages-inspection hook
 #   4) `_run_generation`         — warmup + measurement loop over SGLang Engine
 #   5) `_summarize_dumps`        — count TTIR JSONs by func_name
-#   6) `_summarize_quant_stats`  — fold quant_stats.jsonl into a small dict
+#   6) `_summarize_pruning_stats`  — fold pruning_stats.jsonl into a small dict
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ THIS_FILE = Path(__file__).resolve()
 EXAMPLES_ROOT = THIS_FILE.parents[1]
 APPROXMLIR_ROOT = THIS_FILE.parents[3]
 REPO_ROOT = THIS_FILE.parents[4]
-SOURCE_TRITON_PYTHON = REPO_ROOT / "triton" / "python"
+SOURCE_TRITON_PYTHON = Path(os.environ.get("APPROX_SOURCE_TRITON_PYTHON", str(REPO_ROOT / "triton" / "python")))
 
 
 # Prepend our source paths so sgl and the approx helpers import from the
@@ -79,8 +79,23 @@ def _print_probe(label: str, payload) -> None:
     print(f"[sglang-probe] {label}: {json.dumps(_jsonable(payload), sort_keys=True)}")
 
 
+def _default_prompt() -> str:
+    prompt = os.environ.get("PROMPT")
+    if prompt:
+        return prompt
+    repeat = int(os.environ.get("LONG_PROMPT_REPEAT", "0"))
+    if repeat <= 0:
+        return "The capital of France is"
+    paragraph = (
+        "Approximate compilation keeps program semantics visible while allowing "
+        "carefully bounded transformations across linear algebra kernels, runtime "
+        "management, and backend lowering. "
+    )
+    return paragraph * repeat
+
+
 # Stand up the out dir, Triton cache, PYTHONPATH for child processes, and
-# the env vars that downstream modules (approx_quant_patch, approx_runtime)
+# the env vars that downstream modules (approx_pruning_patch, approx_runtime)
 # read. Called once at the top of main(), before any heavy imports.
 def _configure_environment(out_dir: Path) -> Path:
     # out_dir:    user-supplied or defaulted; receives TTIR dumps + stats.
@@ -93,15 +108,16 @@ def _configure_environment(out_dir: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     os.environ["TRITON_CACHE_DIR"] = str(cache_dir)
     os.environ["APPROX_SGLANG_DUMP_OUT_DIR"] = str(out_dir)
-    os.environ.setdefault("APPROX_SGLANG_STATS_PATH", str(out_dir / "quant_stats.jsonl"))
-    if os.environ.get("APPROX_SGLANG_SQ_COLLECT", "0") == "1":
-        os.environ["SGLANG_DISABLE_CUDA_GRAPH"] = "1"
-        sq_stats_dir = Path(os.environ.get("APPROX_SGLANG_SQ_STATS_DIR", str(out_dir / "sq_stats")))
-        shutil.rmtree(sq_stats_dir, ignore_errors=True)
-        sq_stats_dir.mkdir(parents=True, exist_ok=True)
-        os.environ["APPROX_SGLANG_SQ_STATS_DIR"] = str(sq_stats_dir)
-    os.environ["APPROX_SOURCE_TRITON_PYTHON"] = str(SOURCE_TRITON_PYTHON)
+    os.environ.setdefault("APPROX_SGLANG_PRUNING_STATS_PATH", str(out_dir / "pruning_stats.jsonl"))
+    os.environ.setdefault("APPROX_SOURCE_TRITON_PYTHON", str(SOURCE_TRITON_PYTHON))
     os.environ["APPROX_EXAMPLES_ROOT"] = str(EXAMPLES_ROOT)
+    python_prefix = Path(sys.executable).resolve().parents[1]
+    conda_gcc = python_prefix / "bin" / "x86_64-conda-linux-gnu-gcc"
+    conda_gxx = python_prefix / "bin" / "x86_64-conda-linux-gnu-g++"
+    if conda_gcc.exists() and conda_gxx.exists():
+        os.environ.setdefault("CC", str(conda_gcc))
+        os.environ.setdefault("CXX", str(conda_gxx))
+        os.environ.setdefault("CUDAHOSTCXX", str(conda_gxx))
     bootstrap = THIS_FILE.parent / "bootstrap"
     child_pythonpath = [
         str(bootstrap),
@@ -170,16 +186,29 @@ def _build_engine_kwargs() -> dict:
         "attention_backend": os.environ.get("ATTENTION_BACKEND", "triton"),
         "sampling_backend": os.environ.get("SAMPLING_BACKEND", "pytorch"),
         "disable_cuda_graph": os.environ.get("SGLANG_DISABLE_CUDA_GRAPH", "1") == "1",
+        "disable_piecewise_cuda_graph": os.environ.get("SGLANG_DISABLE_PIECEWISE_CUDA_GRAPH", "1") == "1",
+        "disable_overlap_schedule": os.environ.get("SGLANG_DISABLE_OVERLAP_SCHEDULE", "1") == "1",
+        "disable_radix_cache": os.environ.get("SGLANG_DISABLE_RADIX_CACHE", "0") == "1",
         "log_level": "error",
     }
     mem_fraction = os.environ.get("SGLANG_MEM_FRACTION_STATIC")
     if mem_fraction:
         engine_kwargs["mem_fraction_static"] = float(mem_fraction)
-    if os.environ.get("SGLANG_DISABLE_PIECEWISE_CUDA_GRAPH"):
-        engine_kwargs["disable_piecewise_cuda_graph"] = (
-            os.environ.get("SGLANG_DISABLE_PIECEWISE_CUDA_GRAPH", "0") == "1"
-        )
     return engine_kwargs
+
+
+def _prompt_token_summary(model_path: str, prompts: list[str]) -> dict:
+    try:
+        from sglang.srt.utils.hf_transformers_utils import get_tokenizer
+    except Exception as exc:
+        return {"error": repr(exc), "actual_prompt_tokens": []}
+    tokenizer = get_tokenizer(model_path)
+    lengths = [len(tokenizer.encode(prompt)) for prompt in prompts]
+    return {
+        "actual_prompt_tokens": lengths,
+        "min_prompt_tokens": min(lengths) if lengths else 0,
+        "max_prompt_tokens": max(lengths) if lengths else 0,
+    }
 
 
 # Run warmup_runs unmeasured passes, then measure_runs timed passes, and
@@ -233,11 +262,20 @@ def _summarize_dumps(out_dir: Path) -> None:
     _print_probe("dump_summary", {"out_dir": str(out_dir), "num_ttir": len(jsons), "by_name": by_name})
 
 
-# Fold the quant_stats.jsonl events emitted by approx_quant_patch._record
+# Fold the pruning_stats.jsonl events emitted by approx_pruning_patch._record
 # into a single compact summary dict. Schema here must match what the
 # sweep driver reads off the probe line.
-def _summarize_quant_stats(stats_path: Path) -> None:
-    stats = {"prepare_weight": 0, "apply_approx": 0, "substituted": 0, "by_prefix": {}}
+def _summarize_pruning_stats(stats_path: Path) -> None:
+    stats = {
+        "prepare_weight": 0,
+        "apply_approx": 0,
+        "substituted": 0,
+        "by_prefix": {},
+        "backends": {},
+        "max_m_by_prefix": {},
+        "groups": {},
+        "roles": {},
+    }
     if stats_path.exists():
         for line in stats_path.read_text(encoding="utf-8").splitlines():
             try:
@@ -252,7 +290,19 @@ def _summarize_quant_stats(stats_path: Path) -> None:
                     stats["substituted"] += 1
                 prefix = str(rec.get("prefix", "<unknown>"))
                 stats["by_prefix"][prefix] = stats["by_prefix"].get(prefix, 0) + 1
-    _print_probe("quant_stats", stats)
+                stats["max_m_by_prefix"][prefix] = max(
+                    int(stats["max_m_by_prefix"].get(prefix, 0)),
+                    int(rec.get("M", 0) or 0),
+                )
+                group = str(rec.get("group", ""))
+                if group:
+                    stats["groups"][group] = stats["groups"].get(group, 0) + 1
+                role = str(rec.get("role", ""))
+                if role:
+                    stats["roles"][role] = stats["roles"].get(role, 0) + 1
+                backend = str(rec.get("backend", "<unknown>"))
+                stats["backends"][backend] = stats["backends"].get(backend, 0) + 1
+    _print_probe("pruning_stats", stats)
 
 
 # Orchestrator. Each phase below is numbered so a reader can follow the flow
@@ -288,15 +338,24 @@ def main() -> int:
         return 0
 
     # 4) Start the engine and run generation, guarded so we always clean up.
-    prompt = os.environ.get("PROMPT", "The capital of France is")
+    prompt = _default_prompt()
     prompts = json.loads(os.environ.get("PROMPTS_JSON", "null") or "null") or [prompt]
     batch_size = int(os.environ.get("BATCH_SIZE", "1"))
     max_new_tokens = int(os.environ.get("MAX_NEW_TOKENS", "2"))
-    warmup_runs = int(os.environ.get("WARMUP_RUNS", "0"))
-    measure_runs = int(os.environ.get("MEASURE_RUNS", "1"))
+    warmup_runs = int(os.environ.get("WARMUP_RUNS", "2"))
+    measure_runs = int(os.environ.get("MEASURE_RUNS", "10"))
 
     engine_kwargs = _build_engine_kwargs()
     _print_probe("engine_kwargs", engine_kwargs)
+    token_summary = _prompt_token_summary(engine_kwargs["model_path"], prompts)
+    _print_probe("prompt_tokens", token_summary)
+    min_required = int(os.environ.get("REQUIRE_MIN_PROMPT_TOKENS", "0"))
+    if min_required and int(token_summary.get("min_prompt_tokens", 0)) < min_required:
+        print(
+            f"[sglang-probe] prompt too short: min_prompt_tokens={token_summary.get('min_prompt_tokens')} required={min_required}",
+            file=sys.stderr,
+        )
+        return 5
     llm = sgl.Engine(**engine_kwargs)
     try:
         outputs, latencies = _run_generation(
@@ -321,7 +380,7 @@ def main() -> int:
 
     # 5 + 6) Post-run summaries.
     _summarize_dumps(out_dir)
-    _summarize_quant_stats(Path(os.environ["APPROX_SGLANG_STATS_PATH"]))
+    _summarize_pruning_stats(Path(os.environ["APPROX_SGLANG_PRUNING_STATS_PATH"]))
     return 0
 
 

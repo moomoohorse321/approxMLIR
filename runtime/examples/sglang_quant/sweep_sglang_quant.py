@@ -141,6 +141,7 @@ def _case_env(out_dir: Path, case_extra: dict[str, str]) -> dict[str, str]:
             "SAMPLING_BACKEND": os.environ.get("SAMPLING_BACKEND", "pytorch"),
             "SGLANG_MEM_FRACTION_STATIC": os.environ.get("SGLANG_MEM_FRACTION_STATIC", "0.45"),
             "SGLANG_DISABLE_CUDA_GRAPH": os.environ.get("SGLANG_DISABLE_CUDA_GRAPH", "0"),
+            "SGLANG_DISABLE_PIECEWISE_CUDA_GRAPH": os.environ.get("SGLANG_DISABLE_PIECEWISE_CUDA_GRAPH", "0"),
             "TRITON_PASS_PLUGIN_PATH": str(PLUGIN),
         }
     )

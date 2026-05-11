@@ -4,6 +4,8 @@ import torch
 import triton
 import triton.language as tl
 
+from approx_apl_lut import apl_lut_dequantize_weight, apl_lut_quantize_weight
+
 
 def quantize_weight_i8_per_col(weight: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     if weight.ndim != 2 or weight.dtype not in (torch.float16, torch.bfloat16):
@@ -703,6 +705,134 @@ def approx_sglang_sq_w4a16_linear_kernel_1(
         c_ptr + row * stride_cm + offs_n[None, :] * stride_cn,
         acc,
         mask=offs_n[None, :] < N,
+    )
+
+
+@triton.jit
+def sglang_apl_lut_linear_kernel(
+    a_ptr,
+    qweight_ptr,
+    lut_ptr,
+    c_ptr,
+    M: tl.constexpr,
+    N_orig: tl.constexpr,
+    K_orig: tl.constexpr,
+    K_padded: tl.constexpr,
+    stride_am: tl.constexpr,
+    stride_ak: tl.constexpr,
+    stride_qb: tl.constexpr,
+    stride_qn: tl.constexpr,
+    stride_qw: tl.constexpr,
+    stride_ln: tl.constexpr,
+    stride_lc: tl.constexpr,
+    stride_cm: tl.constexpr,
+    stride_cn: tl.constexpr,
+    BITS: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+):
+    row = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs_k = tl.arange(0, BLOCK_K)
+    acc = tl.zeros((1, BLOCK_N), dtype=tl.float32)
+
+    for k0 in range(0, K_padded, BLOCK_K):
+        k = k0 + offs_k
+        word = k // 32
+        bit_pos = k - word * 32
+        codes = tl.zeros((BLOCK_K, BLOCK_N), dtype=tl.int32)
+        for plane in range(0, BITS):
+            qword = tl.load(
+                qweight_ptr
+                + plane * stride_qb
+                + offs_n[None, :] * stride_qn
+                + word[:, None] * stride_qw,
+                mask=(k[:, None] < K_padded) & (offs_n[None, :] < N_orig),
+                other=0,
+            ).to(tl.int32)
+            qbit = (qword >> bit_pos[:, None]) & 1
+            codes = (codes << 1) | qbit
+        a = tl.load(
+            a_ptr + row * stride_am + k * stride_ak,
+            mask=k < K_orig,
+            other=0.0,
+        ).to(tl.float16)
+        b = tl.load(
+            lut_ptr + offs_n[None, :] * stride_ln + codes * stride_lc,
+            mask=(k[:, None] < K_orig) & (offs_n[None, :] < N_orig),
+            other=0.0,
+        ).to(tl.float16)
+        acc = tl.dot(a[None, :], b, acc=acc, out_dtype=tl.float32)
+
+    tl.store(
+        c_ptr + row * stride_cm + offs_n[None, :] * stride_cn,
+        acc,
+        mask=offs_n[None, :] < N_orig,
+    )
+
+
+@triton.jit
+def approx_sglang_apl_lut_linear_kernel_1(
+    a_ptr,
+    qweight_ptr,
+    lut_ptr,
+    c_ptr,
+    M: tl.constexpr,
+    N_orig: tl.constexpr,
+    K_orig: tl.constexpr,
+    K_padded: tl.constexpr,
+    stride_am: tl.constexpr,
+    stride_ak: tl.constexpr,
+    stride_qb: tl.constexpr,
+    stride_qn: tl.constexpr,
+    stride_qw: tl.constexpr,
+    stride_ln: tl.constexpr,
+    stride_lc: tl.constexpr,
+    stride_cm: tl.constexpr,
+    stride_cn: tl.constexpr,
+    BITS: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+):
+    row = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs_k = tl.arange(0, BLOCK_K)
+    acc = tl.zeros((1, BLOCK_N), dtype=tl.float32)
+
+    for k0 in range(0, K_padded, BLOCK_K):
+        k = k0 + offs_k
+        word = k // 32
+        bit_pos = k - word * 32
+        codes = tl.zeros((BLOCK_K, BLOCK_N), dtype=tl.int32)
+        for plane in range(0, BITS):
+            qword = tl.load(
+                qweight_ptr
+                + plane * stride_qb
+                + offs_n[None, :] * stride_qn
+                + word[:, None] * stride_qw,
+                mask=(k[:, None] < K_padded) & (offs_n[None, :] < N_orig),
+                other=0,
+            ).to(tl.int32)
+            qbit = (qword >> bit_pos[:, None]) & 1
+            codes = (codes << 1) | qbit
+        a = tl.load(
+            a_ptr + row * stride_am + k * stride_ak,
+            mask=k < K_orig,
+            other=0.0,
+        ).to(tl.float16)
+        b = tl.load(
+            lut_ptr + offs_n[None, :] * stride_ln + codes * stride_lc,
+            mask=(k[:, None] < K_orig) & (offs_n[None, :] < N_orig),
+            other=0.0,
+        ).to(tl.float16)
+        acc = tl.dot(a[None, :], b, acc=acc, out_dtype=tl.float32)
+
+    tl.store(
+        c_ptr + row * stride_cm + offs_n[None, :] * stride_cn,
+        acc,
+        mask=offs_n[None, :] < N_orig,
     )
 
 

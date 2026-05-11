@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import atexit
+import hashlib
 import json
 import os
 import sys
@@ -58,6 +59,9 @@ class _Config:
     sq_alpha: float
     sq_group_size: int
     awq_grid_size: int
+    apl_bits: int
+    apl_artifact_dir: str
+    apl_quantizer_version: str
 
     @classmethod
     def from_env(cls) -> "_Config":
@@ -74,6 +78,9 @@ class _Config:
             sq_alpha=float(os.environ.get("APPROX_SGLANG_SQ_ALPHA", "0.85")),
             sq_group_size=int(os.environ.get("APPROX_SGLANG_SQ_GROUP_SIZE", "128")),
             awq_grid_size=int(os.environ.get("APPROX_SGLANG_AWQ_GRID_SIZE", "20")),
+            apl_bits=int(os.environ.get("APPROX_SGLANG_APL_BITS", "4")),
+            apl_artifact_dir=os.environ.get("APPROX_SGLANG_APL_ARTIFACT_DIR", ""),
+            apl_quantizer_version=os.environ.get("APPROX_SGLANG_APL_QUANTIZER_VERSION", "row_uniform_lut_v1"),
         )
 
     def target_match(self, layer: torch.nn.Module) -> bool:
@@ -88,6 +95,23 @@ def _block_dims(default_n: int, default_k: int = 64) -> tuple[int, int]:
         int(os.environ.get("APPROX_SGLANG_BLOCK_N", str(default_n))),
         int(os.environ.get("APPROX_SGLANG_BLOCK_K", str(default_k))),
     )
+
+
+def _apl_launch_dims() -> tuple[int, int, int]:
+    block_n = int(
+        os.environ.get(
+            "APPROX_SGLANG_APL_BLOCK_N",
+            os.environ.get("APPROX_SGLANG_BLOCK_N", "64"),
+        )
+    )
+    block_k = int(
+        os.environ.get(
+            "APPROX_SGLANG_APL_BLOCK_K",
+            os.environ.get("APPROX_SGLANG_BLOCK_K", "64"),
+        )
+    )
+    num_warps = int(os.environ.get("APPROX_SGLANG_APL_NUM_WARPS", "4"))
+    return block_n, block_k, num_warps
 
 
 def _run_substituted_kernel(
@@ -130,8 +154,10 @@ def _install() -> None:
     if str(here) not in sys.path:
         sys.path.insert(0, str(here))
 
+    from approx_apl_lut import apl_lut_quantize_weight
     from approx_kernels import (
         approx_sglang_dynamic_w8a8_linear_kernel_1,
+        approx_sglang_apl_lut_linear_kernel_1,
         approx_sglang_prequant_w8a8_linear_kernel_1,
         approx_sglang_sq_w4a16_linear_kernel_1,
         awq_quantize_weight_i4_groupwise_packed,
@@ -140,6 +166,7 @@ def _install() -> None:
         quantize_weight_i8_per_col,
         repack_i4_packed_for_decode_tile,
         sglang_dynamic_w8a8_linear_kernel,
+        sglang_apl_lut_linear_kernel,
         sglang_prequant_w8a8_linear_kernel,
         sglang_sq_w4a16_linear_kernel,
         sglang_w8a16_linear_kernel,
@@ -244,7 +271,115 @@ def _install() -> None:
         )
         return sq_artifact_layers
 
+    def _apl_model_key() -> str:
+        for env_name in (
+            "APPROX_SGLANG_APL_MODEL_PATH",
+            "APPROX_SGLANG_MODEL_PATH",
+            "MODEL_PATH",
+            "SGLANG_MODEL_PATH",
+        ):
+            value = os.environ.get(env_name, "")
+            if value:
+                return value
+        return "unknown_model"
+
+    def _apl_cache_path(prefix: str, weight_shape: tuple[int, int]) -> Path | None:
+        if not cfg.apl_artifact_dir:
+            return None
+        key = {
+            "model_path": _apl_model_key(),
+            "layer_prefix": prefix,
+            "weight_shape": list(weight_shape),
+            "bits": cfg.apl_bits,
+            "quantizer_version": cfg.apl_quantizer_version,
+        }
+        digest = hashlib.sha256(json.dumps(key, sort_keys=True).encode("utf-8")).hexdigest()[:24]
+        safe_prefix = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in prefix)[:120] or "layer"
+        return Path(cfg.apl_artifact_dir) / f"apl_lut_{safe_prefix}_{digest}.pt"
+
+    def _load_or_build_apl_artifact(layer: torch.nn.Module, weight: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, dict, bool] | None:
+        prefix = getattr(layer, "prefix", "")
+        cache_path = _apl_cache_path(prefix, tuple(weight.shape))
+        artifact_hit = False
+        if cache_path is not None and cache_path.exists():
+            try:
+                rec = torch.load(cache_path, map_location="cpu")
+                meta = dict(rec.get("metadata", {}))
+                expected = {
+                    "backend": "triton_apl_lut",
+                    "bits": cfg.apl_bits,
+                    "K_orig": int(weight.shape[1]),
+                    "N_orig": int(weight.shape[0]),
+                    "quantizer_version": cfg.apl_quantizer_version,
+                }
+                if all(meta.get(k) == v for k, v in expected.items()):
+                    q_cpu = rec["qweight"].contiguous()
+                    lut_cpu = rec["lut"].contiguous()
+                    expected_q_shape = (
+                        int(meta["bits"]),
+                        int(meta["N_padded"]),
+                        int(meta["K_padded"]) // 32,
+                    )
+                    expected_lut_shape = (int(meta["N_padded"]), 1 << int(meta["bits"]))
+                    if (
+                        q_cpu.dtype == torch.int32
+                        and lut_cpu.dtype == torch.float16
+                        and tuple(q_cpu.shape) == expected_q_shape
+                        and tuple(lut_cpu.shape) == expected_lut_shape
+                    ):
+                        artifact_hit = True
+                        return q_cpu, lut_cpu, meta, artifact_hit
+                _record(
+                    {
+                        "event": "apl_artifact_reject",
+                        "prefix": prefix,
+                        "path": str(cache_path),
+                        "reason": "metadata_or_dtype_mismatch",
+                    }
+                )
+            except Exception as exc:
+                _record({"event": "apl_artifact_reject", "prefix": prefix, "path": str(cache_path), "reason": repr(exc)})
+
+        max_runtime_elems = int(os.environ.get("APPROX_SGLANG_APL_MAX_RUNTIME_QUANT_ELEMS", "67108864"))
+        allow_runtime_quant = os.environ.get("APPROX_SGLANG_APL_ALLOW_RUNTIME_QUANT", "1") == "1"
+        if not allow_runtime_quant or weight.numel() > max_runtime_elems:
+            _record(
+                {
+                    "event": "skip_prepare_apl_weight",
+                    "prefix": prefix,
+                    "backend": "triton_apl_lut",
+                    "artifact_hit": False,
+                    "artifact_path": "" if cache_path is None else str(cache_path),
+                    "reason": "missing_artifact_runtime_quant_disabled_or_too_large",
+                    "weight_shape": list(weight.shape),
+                    "bits": cfg.apl_bits,
+                }
+            )
+            return None
+
+        q_cpu, lut_cpu, meta = apl_lut_quantize_weight(weight.detach().cpu(), bits=cfg.apl_bits)
+        meta = {
+            **meta,
+            "backend": "triton_apl_lut",
+            "prefix": prefix,
+            "model_path": _apl_model_key(),
+            "quantizer_version": cfg.apl_quantizer_version,
+        }
+        if cache_path is not None:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            torch.save(
+                {
+                    "qweight": q_cpu,
+                    "lut": lut_cpu,
+                    "metadata": meta,
+                },
+                cache_path,
+            )
+        return q_cpu, lut_cpu, meta, artifact_hit
+
     def _prepared_weight_name() -> str:
+        if cfg.backend == "triton_apl_lut":
+            return "_approx_apl_qweight"
         if cfg.backend in ("triton_sq_w4a16", "triton_awq_w4a16"):
             return "_approx_sq_qweight_i4_t_packed"
         return "_approx_qweight_i8_t"
@@ -262,7 +397,33 @@ def _install() -> None:
         prefix = getattr(layer, "prefix", "")
         qweight_name = _prepared_weight_name()
         extra_record: dict[str, object] = {}
-        if cfg.backend in ("triton_sq_w4a16", "triton_awq_w4a16"):
+        if cfg.backend == "triton_apl_lut":
+            artifact = _load_or_build_apl_artifact(layer, weight.data)
+            if artifact is None:
+                return False
+            q_cpu, lut_cpu, apl_meta, artifact_hit = artifact
+            q = q_cpu.to(device=weight.device, non_blocking=True).contiguous()
+            lut = lut_cpu.to(device=weight.device, non_blocking=True).contiguous()
+            layer.register_buffer(qweight_name, q, persistent=False)
+            layer.register_buffer("_approx_apl_lut", lut, persistent=False)
+            layer._approx_apl_bits = int(apl_meta["bits"])
+            layer._approx_apl_k_orig = int(apl_meta["K_orig"])
+            layer._approx_apl_k_padded = int(apl_meta["K_padded"])
+            layer._approx_apl_n_orig = int(apl_meta["N_orig"])
+            layer._approx_apl_n_padded = int(apl_meta["N_padded"])
+            layer._approx_apl_artifact_hit = bool(artifact_hit)
+            qweight_bits = int(apl_meta["bits"])
+            extra_record = {
+                "lut_shape": list(lut.shape),
+                "K_orig": int(apl_meta["K_orig"]),
+                "K_padded": int(apl_meta["K_padded"]),
+                "N_orig": int(apl_meta["N_orig"]),
+                "N_padded": int(apl_meta["N_padded"]),
+                "artifact_hit": artifact_hit,
+                "artifact_path": str(_apl_cache_path(prefix, tuple(weight.shape)) or ""),
+                "quantizer_version": cfg.apl_quantizer_version,
+            }
+        elif cfg.backend in ("triton_sq_w4a16", "triton_awq_w4a16"):
             sq_layers = _load_sq_artifact_layers()
             act_absmax = None if sq_layers is None else sq_layers.get(prefix)
             if act_absmax is None:
@@ -604,6 +765,105 @@ def _install() -> None:
             out = out + bias
         return out.reshape(*x_shape[:-1], N)
 
+    def _apply_apl_lut(layer, x2d, x_shape, bias):
+        import triton
+
+        qweight = layer._approx_apl_qweight
+        lut = layer._approx_apl_lut
+        M, K = x2d.shape[0], x2d.shape[1]
+        K_orig = int(layer._approx_apl_k_orig)
+        K_padded = int(layer._approx_apl_k_padded)
+        N_orig = int(layer._approx_apl_n_orig)
+        bits = int(layer._approx_apl_bits)
+        if K != K_orig:
+            _record(
+                {
+                    "event": "skip_apply_apl",
+                    "backend": "triton_apl_lut",
+                    "prefix": getattr(layer, "prefix", ""),
+                    "M": M,
+                    "N": N_orig,
+                    "K": K,
+                    "K_orig": K_orig,
+                    "reason": "activation_k_mismatch",
+                }
+            )
+            return None
+        block_n, block_k, num_warps = _apl_launch_dims()
+        if block_k % 32 != 0:
+            raise ValueError(f"APL BLOCK_K must be divisible by 32, got {block_k}")
+        grid = (M, triton.cdiv(N_orig, block_n))
+        out = torch.empty((M, N_orig), device=x2d.device, dtype=x2d.dtype)
+        args = (
+            x2d,
+            qweight,
+            lut,
+            out,
+            M,
+            N_orig,
+            K_orig,
+            K_padded,
+            x2d.stride(0),
+            x2d.stride(1),
+            qweight.stride(0),
+            qweight.stride(1),
+            qweight.stride(2),
+            lut.stride(0),
+            lut.stride(1),
+            out.stride(0),
+            out.stride(1),
+        )
+        kwargs = dict(BITS=bits, BLOCK_N=block_n, BLOCK_K=block_k, num_warps=num_warps)
+        shape_key = (
+            "triton_apl_lut",
+            str(x2d.dtype),
+            str(lut.dtype),
+            M,
+            N_orig,
+            K_orig,
+            K_padded,
+            bits,
+            x2d.stride(0),
+            x2d.stride(1),
+            qweight.stride(0),
+            qweight.stride(1),
+            qweight.stride(2),
+            lut.stride(0),
+            lut.stride(1),
+            out.stride(0),
+            out.stride(1),
+            block_n,
+            block_k,
+            num_warps,
+        )
+        _run_substituted_kernel(
+            backend_name="triton_apl_lut",
+            primary=sglang_apl_lut_linear_kernel,
+            substitute=approx_sglang_apl_lut_linear_kernel_1,
+            substitute_name="approx_sglang_apl_lut_linear_kernel_1",
+            grid=grid,
+            args=args,
+            kwargs=kwargs,
+            shape_key=shape_key,
+            use_substitute=cfg.use_substitute,
+            record_common={
+                "prefix": getattr(layer, "prefix", ""),
+                "M": M,
+                "N": N_orig,
+                "K": K_orig,
+                "K_padded": K_padded,
+                "bits": bits,
+                "block_n": block_n,
+                "block_k": block_k,
+                "num_warps": num_warps,
+                "artifact_hit": getattr(layer, "_approx_apl_artifact_hit", False),
+            },
+            layer=layer,
+        )
+        if bias is not None:
+            out = out + bias
+        return out.reshape(*x_shape[:-1], N_orig)
+
     def _apply_prequant(layer, x2d, x_shape, bias):
         import triton
 
@@ -769,6 +1029,7 @@ def _install() -> None:
         "triton_w8a16": _apply_w8a16,
         "triton_sq_w4a16": _apply_sq_w4a16,
         "triton_awq_w4a16": _apply_sq_w4a16,
+        "triton_apl_lut": _apply_apl_lut,
         "triton_prequant": _apply_prequant,
         "triton": _apply_dynamic_w8a8,
         "sgl_kernel": _apply_sgl_kernel,
