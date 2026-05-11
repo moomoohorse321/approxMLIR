@@ -1,4 +1,6 @@
 *.log
+__pycache__/
+*.pyc
 build/
 .clangd/
 .cache/
@@ -18,3 +20,7 @@ test/llm/*.mlir
 test/llm/bin
 
 llvm-project/build
+runtime/examples/diffusion/outputs/
+runtime/examples/diffusion/models/
+runtime/examples/diffusion/goldens/
+runtime/examples/diffusion/calibration/
