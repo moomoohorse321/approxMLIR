@@ -735,7 +735,8 @@ def sglang_apl_lut_linear_kernel(
     pid_n = tl.program_id(1)
     offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
     offs_k = tl.arange(0, BLOCK_K)
-    acc = tl.zeros((1, BLOCK_N), dtype=tl.float32)
+    acc_code = tl.zeros((1, BLOCK_N), dtype=tl.float32)
+    sum_a = tl.full((), 0.0, tl.float32)
 
     for k0 in range(0, K_padded, BLOCK_K):
         k = k0 + offs_k
@@ -758,12 +759,20 @@ def sglang_apl_lut_linear_kernel(
             mask=k < K_orig,
             other=0.0,
         ).to(tl.float16)
-        b = tl.load(
-            lut_ptr + offs_n[None, :] * stride_ln + codes * stride_lc,
-            mask=(k[:, None] < K_orig) & (offs_n[None, :] < N_orig),
-            other=0.0,
-        ).to(tl.float16)
-        acc = tl.dot(a[None, :], b, acc=acc, out_dtype=tl.float32)
+        sum_a += tl.sum(a.to(tl.float32), axis=0)
+        acc_code = tl.dot(a[None, :], codes.to(tl.float16), acc=acc_code, out_dtype=tl.float32)
+
+    lut0 = tl.load(
+        lut_ptr + offs_n * stride_ln,
+        mask=offs_n < N_orig,
+        other=0.0,
+    ).to(tl.float32)
+    lut1 = tl.load(
+        lut_ptr + offs_n * stride_ln + stride_lc,
+        mask=offs_n < N_orig,
+        other=0.0,
+    ).to(tl.float32)
+    acc = sum_a * lut0[None, :] + acc_code * (lut1 - lut0)[None, :]
 
     tl.store(
         c_ptr + row * stride_cm + offs_n[None, :] * stride_cn,
@@ -799,7 +808,8 @@ def approx_sglang_apl_lut_linear_kernel_1(
     pid_n = tl.program_id(1)
     offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
     offs_k = tl.arange(0, BLOCK_K)
-    acc = tl.zeros((1, BLOCK_N), dtype=tl.float32)
+    acc_code = tl.zeros((1, BLOCK_N), dtype=tl.float32)
+    sum_a = tl.full((), 0.0, tl.float32)
 
     for k0 in range(0, K_padded, BLOCK_K):
         k = k0 + offs_k
@@ -822,12 +832,20 @@ def approx_sglang_apl_lut_linear_kernel_1(
             mask=k < K_orig,
             other=0.0,
         ).to(tl.float16)
-        b = tl.load(
-            lut_ptr + offs_n[None, :] * stride_ln + codes * stride_lc,
-            mask=(k[:, None] < K_orig) & (offs_n[None, :] < N_orig),
-            other=0.0,
-        ).to(tl.float16)
-        acc = tl.dot(a[None, :], b, acc=acc, out_dtype=tl.float32)
+        sum_a += tl.sum(a.to(tl.float32), axis=0)
+        acc_code = tl.dot(a[None, :], codes.to(tl.float16), acc=acc_code, out_dtype=tl.float32)
+
+    lut0 = tl.load(
+        lut_ptr + offs_n * stride_ln,
+        mask=offs_n < N_orig,
+        other=0.0,
+    ).to(tl.float32)
+    lut1 = tl.load(
+        lut_ptr + offs_n * stride_ln + stride_lc,
+        mask=offs_n < N_orig,
+        other=0.0,
+    ).to(tl.float32)
+    acc = sum_a * lut0[None, :] + acc_code * (lut1 - lut0)[None, :]
 
     tl.store(
         c_ptr + row * stride_cm + offs_n[None, :] * stride_cn,
