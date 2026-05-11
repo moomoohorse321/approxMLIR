@@ -12,6 +12,11 @@ if str(EXAMPLES) not in sys.path:
     sys.path.insert(0, str(EXAMPLES))
 
 from approx_apl_lut import (  # noqa: E402
+    APL_LAYOUT_CUDA_PERMUTED,
+    APL_LAYOUT_NATURAL,
+    APL_QUANTIZER_ROW_KMEANS,
+    APL_QUANTIZER_ROW_UNIFORM,
+    apl_lut_convert_layout,
     apl_lut_dequantize_weight,
     apl_lut_quantize_weight,
 )
@@ -34,6 +39,8 @@ def test_apl_lut_pack_shape_padding_and_msb_order() -> None:
     assert meta["K_padded"] == 64
     assert meta["N_orig"] == 2
     assert meta["N_padded"] == 4
+    assert meta["layout_version"] == APL_LAYOUT_NATURAL
+    assert meta["quantizer_version"] == APL_QUANTIZER_ROW_UNIFORM
 
     dequant = apl_lut_dequantize_weight(qweight, lut, 3, k_orig=32, n_orig=2)
     assert dequant.shape == codes_weight.shape
@@ -61,6 +68,80 @@ def test_apl_lut_dequant_matches_reference_lookup() -> None:
     expected = torch.gather(lut, 1, codes)[:5, :70].contiguous()
 
     assert torch.equal(dequant, expected)
+
+
+@pytest.mark.parametrize("bits", [3, 4, 8])
+def test_apl_lut_cuda_permuted_layout_dequant_matches_natural(bits: int) -> None:
+    weight = torch.randn(6, 65, dtype=torch.float16)
+    q_nat, lut_nat, meta_nat = apl_lut_quantize_weight(
+        weight,
+        bits=bits,
+        pad_n_to=4,
+        pad_k_to=96,
+        layout_version=APL_LAYOUT_NATURAL,
+    )
+    q_cuda, lut_cuda = apl_lut_convert_layout(
+        q_nat,
+        lut_nat,
+        src_layout=APL_LAYOUT_NATURAL,
+        dst_layout=APL_LAYOUT_CUDA_PERMUTED,
+    )
+    q_round, lut_round = apl_lut_convert_layout(
+        q_cuda,
+        lut_cuda,
+        src_layout=APL_LAYOUT_CUDA_PERMUTED,
+        dst_layout=APL_LAYOUT_NATURAL,
+    )
+
+    assert torch.equal(q_round, q_nat)
+    assert torch.equal(lut_round, lut_nat)
+    assert q_cuda.shape == (bits, 8, 3)
+    assert lut_cuda.shape == (8, 1 << bits)
+
+    dequant_nat = apl_lut_dequantize_weight(
+        q_nat,
+        lut_nat,
+        bits,
+        k_orig=meta_nat["K_orig"],
+        n_orig=meta_nat["N_orig"],
+    )
+    dequant_cuda = apl_lut_dequantize_weight(
+        q_cuda,
+        lut_cuda,
+        bits,
+        k_orig=meta_nat["K_orig"],
+        n_orig=meta_nat["N_orig"],
+        layout_version=APL_LAYOUT_CUDA_PERMUTED,
+    )
+    assert torch.equal(dequant_cuda, dequant_nat)
+
+
+def test_apl_lut_quantizer_versions_are_explicit() -> None:
+    weight = torch.randn(4, 48, dtype=torch.float32)
+    q_uniform, lut_uniform, meta_uniform = apl_lut_quantize_weight(
+        weight,
+        bits=4,
+        quantizer_version=APL_QUANTIZER_ROW_UNIFORM,
+    )
+    q_kmeans, lut_kmeans, meta_kmeans = apl_lut_quantize_weight(
+        weight,
+        bits=4,
+        quantizer_version=APL_QUANTIZER_ROW_KMEANS,
+    )
+
+    assert q_uniform.shape == q_kmeans.shape == (4, 4, 2)
+    assert lut_uniform.shape == lut_kmeans.shape == (4, 16)
+    assert meta_uniform["quantizer_version"] == APL_QUANTIZER_ROW_UNIFORM
+    assert meta_kmeans["quantizer_version"] == APL_QUANTIZER_ROW_KMEANS
+    assert meta_uniform["layout_version"] == APL_LAYOUT_NATURAL
+    assert meta_kmeans["layout_version"] == APL_LAYOUT_NATURAL
+
+
+def test_apl_lut_rejects_invalid_artifact_padding() -> None:
+    qweight = torch.zeros((4, 5, 2), dtype=torch.int32)
+    lut = torch.zeros((5, 16), dtype=torch.float16)
+    with pytest.raises(ValueError, match="N_padded"):
+        apl_lut_dequantize_weight(qweight, lut, 4)
 
 
 @pytest.mark.skipif(sglang_apl_lut_linear_kernel is None or not torch.cuda.is_available(), reason="requires Triton and CUDA")

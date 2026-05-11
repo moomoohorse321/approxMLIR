@@ -76,6 +76,18 @@ Useful environment variables:
 - `APPROX_SGLANG_SQ_GROUP_SIZE`: W4 group size, default `128`
 - `APPROX_SGLANG_SQ_BLOCK_K`: SQ-W4 K tile size, default `64`
 - `APPROX_SGLANG_AWQ_GRID_SIZE`: AWQ-style ratio search grid size, default `20`
+- `APPROX_SGLANG_APL_BITS`: APL LUT bit width, typically `4` for porting
+  diagnosis and `8` for accuracy/e2e acceptance
+- `APPROX_SGLANG_APL_LAYOUT_VERSION`: APL artifact layout, currently
+  `natural_bitplane_v1` for the implemented Triton kernel; helpers also
+  understand `cuda_permuted_bitplane_v1` for parity experiments
+- `APPROX_SGLANG_APL_QUANTIZER_VERSION`: APL quantizer metadata,
+  `row_uniform_lut_v1`, `row_kmeans_lut_v1`, or loaded-only
+  `imported_anyprecision_v1`
+- `APPROX_SGLANG_APL_KERNEL_VARIANT`: APL kernel variant. The runtime path
+  currently executes `natural_tl_dot`; the microbench matrix reports planned
+  `cuda_permuted_row_block` and `ksplit_decode` candidates as unsupported
+  until implemented
 
 SmoothQuant-style calibration flow:
 
@@ -138,3 +150,28 @@ same online kernel and decode-tiled layout, but a different load-time
 activation-aware group-wise W4 quantizer. CUDA graph must be enabled for
 serving-like numbers, otherwise launch overhead dominates and the same
 replacement can look flat or negative.
+
+APL LUT diagnosis is intentionally gated before e2e claims. Run the decode
+microbench on GPU0 against either a shape inferred from `quant_stats.jsonl` or
+the fallback Qwen shape:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 \
+python3 approxMLIR/runtime/examples/sglang_quant/microbench_apl_lut.py \
+  --stats-jsonl /tmp/approx_sglang_probe/quant_stats.jsonl \
+  --bits 4 8 \
+  --output-json /tmp/approx_apl_lut_microbench.json
+```
+
+The hard gate for entering SGLang decode-only is `triton.median_ms <
+exact.median_ms` for the same bit width and target shape. The sweep script can
+include APL cases with `APPROX_SGLANG_INCLUDE_APL_CASES=1`; its probe summary
+records `bits`, `layout_version`, `quantizer_version`, `kernel_variant`,
+`source_dtype`, `M/N/K`, artifact hits, substitution counts, and whether any
+substituted apply was non-decode (`M != 1`).
+
+For the current natural-layout decode kernel, the default APL tile is
+`APPROX_SGLANG_APL_BLOCK_N=64`, `APPROX_SGLANG_APL_NUM_WARPS=4`, and a
+per-bit K tile: `128` for bits 7, `256` otherwise. This is the tested default
+configuration that passes the fallback `M=1, N=9728, K=896` hard gate for bits
+3 through 8 on an RTX A5000.

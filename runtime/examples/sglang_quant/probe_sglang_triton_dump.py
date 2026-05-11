@@ -237,7 +237,19 @@ def _summarize_dumps(out_dir: Path) -> None:
 # into a single compact summary dict. Schema here must match what the
 # sweep driver reads off the probe line.
 def _summarize_quant_stats(stats_path: Path) -> None:
-    stats = {"prepare_weight": 0, "apply_approx": 0, "substituted": 0, "by_prefix": {}}
+    stats = {
+        "prepare_weight": 0,
+        "apply_approx": 0,
+        "substituted": 0,
+        "by_prefix": {},
+        "max_m_by_prefix": {},
+        "non_decode_apply": 0,
+        "by_bits": {},
+        "by_layout_version": {},
+        "by_quantizer_version": {},
+        "by_kernel_variant": {},
+        "artifact_hits": 0,
+    }
     if stats_path.exists():
         for line in stats_path.read_text(encoding="utf-8").splitlines():
             try:
@@ -247,11 +259,27 @@ def _summarize_quant_stats(stats_path: Path) -> None:
             event = rec.get("event")
             if event in ("prepare_weight", "apply_approx"):
                 stats[event] += 1
+                for rec_key, stats_key in (
+                    ("bits", "by_bits"),
+                    ("layout_version", "by_layout_version"),
+                    ("quantizer_version", "by_quantizer_version"),
+                    ("kernel_variant", "by_kernel_variant"),
+                ):
+                    value = rec.get(rec_key)
+                    if value is not None:
+                        value = str(value)
+                        stats[stats_key][value] = stats[stats_key].get(value, 0) + 1
+                if rec.get("artifact_hit"):
+                    stats["artifact_hits"] += 1
             if event == "apply_approx":
                 if rec.get("substituted"):
                     stats["substituted"] += 1
                 prefix = str(rec.get("prefix", "<unknown>"))
                 stats["by_prefix"][prefix] = stats["by_prefix"].get(prefix, 0) + 1
+                m = int(rec.get("M", 0) or 0)
+                stats["max_m_by_prefix"][prefix] = max(int(stats["max_m_by_prefix"].get(prefix, 0)), m)
+                if m != 1:
+                    stats["non_decode_apply"] += 1
     _print_probe("quant_stats", stats)
 
 

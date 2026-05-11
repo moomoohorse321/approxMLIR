@@ -122,6 +122,35 @@ if os.environ.get("APPROX_SGLANG_INCLUDE_DROP_CASES", "0") == "1":
         ]
     )
 
+if os.environ.get("APPROX_SGLANG_INCLUDE_APL_CASES", "0") == "1":
+    for bits in ("4", "8"):
+        _CASES.append(
+            (
+                f"gate_up_apl_lut_b{bits}",
+                {
+                    "APPROX_SGLANG_QUANT": "1",
+                    "APPROX_SGLANG_MODE": "approx",
+                    "APPROX_SGLANG_TARGET": os.environ.get("APPROX_SGLANG_APL_TARGET", "gate_up_proj"),
+                    "APPROX_SGLANG_BACKEND": "triton_apl_lut",
+                    "APPROX_SGLANG_USE_SUBSTITUTE": "1",
+                    "APPROX_SGLANG_APL_BITS": bits,
+                    "APPROX_SGLANG_APL_ARTIFACT_DIR": os.environ.get("APPROX_SGLANG_APL_ARTIFACT_DIR", ""),
+                    "APPROX_SGLANG_APL_LAYOUT_VERSION": os.environ.get(
+                        "APPROX_SGLANG_APL_LAYOUT_VERSION",
+                        "natural_bitplane_v1",
+                    ),
+                    "APPROX_SGLANG_APL_QUANTIZER_VERSION": os.environ.get(
+                        f"APPROX_SGLANG_APL_B{bits}_QUANTIZER_VERSION",
+                        os.environ.get("APPROX_SGLANG_APL_QUANTIZER_VERSION", "row_uniform_lut_v1"),
+                    ),
+                    "APPROX_SGLANG_APL_KERNEL_VARIANT": os.environ.get(
+                        "APPROX_SGLANG_APL_KERNEL_VARIANT",
+                        "natural_tl_dot",
+                    ),
+                },
+            )
+        )
+
 
 # Build the full env passed to one probe subprocess: the caller's env, then
 # the "probe knobs" overrideable from the caller (MODEL_PATH etc), then the
@@ -189,6 +218,16 @@ def _print_case_result(rec: dict, exact_median: float | None) -> float | None:
     qstats = rec.get("quant_stats", {})
     median = lat.get("median")
     speedup = exact_median / median if exact_median and median else None
+    hard_gate_pass = None
+    if exact_median and median:
+        hard_gate_pass = median < exact_median
+    decode_only_clean = None
+    if qstats.get("apply_approx"):
+        decode_only_clean = (
+            qstats.get("apply_approx", 0) > 0
+            and qstats.get("substituted") == qstats.get("apply_approx")
+            and qstats.get("non_decode_apply", 0) == 0
+        )
     print(
         "[sglang-sweep] result "
         + json.dumps(
@@ -197,8 +236,15 @@ def _print_case_result(rec: dict, exact_median: float | None) -> float | None:
                 "returncode": rec["returncode"],
                 "median": median,
                 "speedup_vs_exact": speedup,
+                "hard_gate_pass": hard_gate_pass,
+                "decode_only_clean": decode_only_clean,
                 "apply_approx": qstats.get("apply_approx"),
                 "substituted": qstats.get("substituted"),
+                "by_bits": qstats.get("by_bits"),
+                "by_layout_version": qstats.get("by_layout_version"),
+                "by_quantizer_version": qstats.get("by_quantizer_version"),
+                "by_kernel_variant": qstats.get("by_kernel_variant"),
+                "max_m_by_prefix": qstats.get("max_m_by_prefix"),
                 "text": rec.get("output", {}).get("text"),
             },
             sort_keys=True,

@@ -61,7 +61,9 @@ class _Config:
     awq_grid_size: int
     apl_bits: int
     apl_artifact_dir: str
+    apl_layout_version: str
     apl_quantizer_version: str
+    apl_kernel_variant: str
 
     @classmethod
     def from_env(cls) -> "_Config":
@@ -80,7 +82,9 @@ class _Config:
             awq_grid_size=int(os.environ.get("APPROX_SGLANG_AWQ_GRID_SIZE", "20")),
             apl_bits=int(os.environ.get("APPROX_SGLANG_APL_BITS", "4")),
             apl_artifact_dir=os.environ.get("APPROX_SGLANG_APL_ARTIFACT_DIR", ""),
+            apl_layout_version=os.environ.get("APPROX_SGLANG_APL_LAYOUT_VERSION", "natural_bitplane_v1"),
             apl_quantizer_version=os.environ.get("APPROX_SGLANG_APL_QUANTIZER_VERSION", "row_uniform_lut_v1"),
+            apl_kernel_variant=os.environ.get("APPROX_SGLANG_APL_KERNEL_VARIANT", "natural_tl_dot"),
         )
 
     def target_match(self, layer: torch.nn.Module) -> bool:
@@ -97,19 +101,15 @@ def _block_dims(default_n: int, default_k: int = 64) -> tuple[int, int]:
     )
 
 
-def _apl_launch_dims() -> tuple[int, int, int]:
+def _apl_launch_dims(bits: int) -> tuple[int, int, int]:
     block_n = int(
         os.environ.get(
             "APPROX_SGLANG_APL_BLOCK_N",
             os.environ.get("APPROX_SGLANG_BLOCK_N", "64"),
         )
     )
-    block_k = int(
-        os.environ.get(
-            "APPROX_SGLANG_APL_BLOCK_K",
-            os.environ.get("APPROX_SGLANG_BLOCK_K", "64"),
-        )
-    )
+    block_k_env = os.environ.get("APPROX_SGLANG_APL_BLOCK_K", os.environ.get("APPROX_SGLANG_BLOCK_K", ""))
+    block_k = int(block_k_env) if block_k_env else (128 if int(bits) == 7 else 256)
     num_warps = int(os.environ.get("APPROX_SGLANG_APL_NUM_WARPS", "4"))
     return block_n, block_k, num_warps
 
@@ -154,7 +154,13 @@ def _install() -> None:
     if str(here) not in sys.path:
         sys.path.insert(0, str(here))
 
-    from approx_apl_lut import apl_lut_quantize_weight
+    from approx_apl_lut import (
+        APL_LAYOUT_NATURAL,
+        APL_QUANTIZER_IMPORTED_ANYPRECISION,
+        APL_QUANTIZER_ROW_KMEANS,
+        APL_QUANTIZER_ROW_UNIFORM,
+        apl_lut_quantize_weight,
+    )
     from approx_kernels import (
         approx_sglang_dynamic_w8a8_linear_kernel_1,
         approx_sglang_apl_lut_linear_kernel_1,
@@ -199,6 +205,26 @@ def _install() -> None:
     original_process = UnquantizedLinearMethod.process_weights_after_loading
     original_apply = UnquantizedLinearMethod.apply
     cfg = _Config.from_env()
+    if cfg.backend == "triton_apl_lut":
+        if cfg.apl_kernel_variant != "natural_tl_dot":
+            _record(
+                {
+                    "event": "unsupported_apl_kernel_variant",
+                    "backend": "triton_apl_lut",
+                    "kernel_variant": cfg.apl_kernel_variant,
+                    "reason": "only natural_tl_dot is implemented in this runtime path",
+                }
+            )
+        if cfg.apl_layout_version != APL_LAYOUT_NATURAL and cfg.apl_kernel_variant == "natural_tl_dot":
+            _record(
+                {
+                    "event": "unsupported_apl_layout",
+                    "backend": "triton_apl_lut",
+                    "layout_version": cfg.apl_layout_version,
+                    "kernel_variant": cfg.apl_kernel_variant,
+                    "reason": "natural_tl_dot requires natural_bitplane_v1",
+                }
+            )
 
     sq_stats_by_prefix: dict[str, torch.Tensor] = {}
     sq_artifact_layers: dict[str, torch.Tensor] | None = None
@@ -291,6 +317,7 @@ def _install() -> None:
             "layer_prefix": prefix,
             "weight_shape": list(weight_shape),
             "bits": cfg.apl_bits,
+            "layout_version": cfg.apl_layout_version,
             "quantizer_version": cfg.apl_quantizer_version,
         }
         digest = hashlib.sha256(json.dumps(key, sort_keys=True).encode("utf-8")).hexdigest()[:24]
@@ -310,6 +337,7 @@ def _install() -> None:
                     "bits": cfg.apl_bits,
                     "K_orig": int(weight.shape[1]),
                     "N_orig": int(weight.shape[0]),
+                    "layout_version": cfg.apl_layout_version,
                     "quantizer_version": cfg.apl_quantizer_version,
                 }
                 if all(meta.get(k) == v for k, v in expected.items()):
@@ -335,6 +363,8 @@ def _install() -> None:
                         "prefix": prefix,
                         "path": str(cache_path),
                         "reason": "metadata_or_dtype_mismatch",
+                        "expected": expected,
+                        "actual": meta,
                     }
                 )
             except Exception as exc:
@@ -342,6 +372,38 @@ def _install() -> None:
 
         max_runtime_elems = int(os.environ.get("APPROX_SGLANG_APL_MAX_RUNTIME_QUANT_ELEMS", "67108864"))
         allow_runtime_quant = os.environ.get("APPROX_SGLANG_APL_ALLOW_RUNTIME_QUANT", "1") == "1"
+        if cfg.apl_quantizer_version == APL_QUANTIZER_IMPORTED_ANYPRECISION:
+            _record(
+                {
+                    "event": "skip_prepare_apl_weight",
+                    "prefix": prefix,
+                    "backend": "triton_apl_lut",
+                    "artifact_hit": False,
+                    "artifact_path": "" if cache_path is None else str(cache_path),
+                    "reason": "imported_anyprecision_requires_artifact",
+                    "weight_shape": list(weight.shape),
+                    "bits": cfg.apl_bits,
+                    "layout_version": cfg.apl_layout_version,
+                    "quantizer_version": cfg.apl_quantizer_version,
+                }
+            )
+            return None
+        if cfg.apl_quantizer_version not in (APL_QUANTIZER_ROW_UNIFORM, APL_QUANTIZER_ROW_KMEANS):
+            _record(
+                {
+                    "event": "skip_prepare_apl_weight",
+                    "prefix": prefix,
+                    "backend": "triton_apl_lut",
+                    "artifact_hit": False,
+                    "artifact_path": "" if cache_path is None else str(cache_path),
+                    "reason": "unsupported_runtime_quantizer",
+                    "weight_shape": list(weight.shape),
+                    "bits": cfg.apl_bits,
+                    "layout_version": cfg.apl_layout_version,
+                    "quantizer_version": cfg.apl_quantizer_version,
+                }
+            )
+            return None
         if not allow_runtime_quant or weight.numel() > max_runtime_elems:
             _record(
                 {
@@ -353,16 +415,41 @@ def _install() -> None:
                     "reason": "missing_artifact_runtime_quant_disabled_or_too_large",
                     "weight_shape": list(weight.shape),
                     "bits": cfg.apl_bits,
+                    "layout_version": cfg.apl_layout_version,
+                    "quantizer_version": cfg.apl_quantizer_version,
                 }
             )
             return None
 
-        q_cpu, lut_cpu, meta = apl_lut_quantize_weight(weight.detach().cpu(), bits=cfg.apl_bits)
+        try:
+            q_cpu, lut_cpu, meta = apl_lut_quantize_weight(
+                weight.detach().cpu(),
+                bits=cfg.apl_bits,
+                layout_version=cfg.apl_layout_version,
+                quantizer_version=cfg.apl_quantizer_version,
+            )
+        except Exception as exc:
+            _record(
+                {
+                    "event": "skip_prepare_apl_weight",
+                    "prefix": prefix,
+                    "backend": "triton_apl_lut",
+                    "artifact_hit": False,
+                    "artifact_path": "" if cache_path is None else str(cache_path),
+                    "reason": repr(exc),
+                    "weight_shape": list(weight.shape),
+                    "bits": cfg.apl_bits,
+                    "layout_version": cfg.apl_layout_version,
+                    "quantizer_version": cfg.apl_quantizer_version,
+                }
+            )
+            return None
         meta = {
             **meta,
             "backend": "triton_apl_lut",
             "prefix": prefix,
             "model_path": _apl_model_key(),
+            "layout_version": cfg.apl_layout_version,
             "quantizer_version": cfg.apl_quantizer_version,
         }
         if cache_path is not None:
@@ -402,6 +489,21 @@ def _install() -> None:
             if artifact is None:
                 return False
             q_cpu, lut_cpu, apl_meta, artifact_hit = artifact
+            layout_version = str(apl_meta.get("layout_version", ""))
+            if cfg.apl_kernel_variant != "natural_tl_dot" or layout_version != APL_LAYOUT_NATURAL:
+                _record(
+                    {
+                        "event": "skip_prepare_apl_weight",
+                        "prefix": prefix,
+                        "backend": "triton_apl_lut",
+                        "artifact_hit": artifact_hit,
+                        "artifact_path": str(_apl_cache_path(prefix, tuple(weight.shape)) or ""),
+                        "reason": "unsupported_layout_kernel_combination",
+                        "layout_version": layout_version,
+                        "kernel_variant": cfg.apl_kernel_variant,
+                    }
+                )
+                return False
             q = q_cpu.to(device=weight.device, non_blocking=True).contiguous()
             lut = lut_cpu.to(device=weight.device, non_blocking=True).contiguous()
             layer.register_buffer(qweight_name, q, persistent=False)
@@ -412,6 +514,10 @@ def _install() -> None:
             layer._approx_apl_n_orig = int(apl_meta["N_orig"])
             layer._approx_apl_n_padded = int(apl_meta["N_padded"])
             layer._approx_apl_artifact_hit = bool(artifact_hit)
+            layer._approx_apl_layout_version = layout_version
+            layer._approx_apl_quantizer_version = str(apl_meta.get("quantizer_version", cfg.apl_quantizer_version))
+            layer._approx_apl_kernel_variant = cfg.apl_kernel_variant
+            layer._approx_apl_source_dtype = str(apl_meta.get("source_dtype", weight.dtype))
             qweight_bits = int(apl_meta["bits"])
             extra_record = {
                 "lut_shape": list(lut.shape),
@@ -421,7 +527,10 @@ def _install() -> None:
                 "N_padded": int(apl_meta["N_padded"]),
                 "artifact_hit": artifact_hit,
                 "artifact_path": str(_apl_cache_path(prefix, tuple(weight.shape)) or ""),
-                "quantizer_version": cfg.apl_quantizer_version,
+                "layout_version": layout_version,
+                "quantizer_version": str(apl_meta.get("quantizer_version", cfg.apl_quantizer_version)),
+                "kernel_variant": cfg.apl_kernel_variant,
+                "source_dtype": str(apl_meta.get("source_dtype", weight.dtype)),
             }
         elif cfg.backend in ("triton_sq_w4a16", "triton_awq_w4a16"):
             sq_layers = _load_sq_artifact_layers()
@@ -775,6 +884,10 @@ def _install() -> None:
         K_padded = int(layer._approx_apl_k_padded)
         N_orig = int(layer._approx_apl_n_orig)
         bits = int(layer._approx_apl_bits)
+        layout_version = str(getattr(layer, "_approx_apl_layout_version", ""))
+        quantizer_version = str(getattr(layer, "_approx_apl_quantizer_version", ""))
+        kernel_variant = str(getattr(layer, "_approx_apl_kernel_variant", cfg.apl_kernel_variant))
+        source_dtype = str(getattr(layer, "_approx_apl_source_dtype", ""))
         if K != K_orig:
             _record(
                 {
@@ -786,10 +899,15 @@ def _install() -> None:
                     "K": K,
                     "K_orig": K_orig,
                     "reason": "activation_k_mismatch",
+                    "bits": bits,
+                    "layout_version": layout_version,
+                    "quantizer_version": quantizer_version,
+                    "kernel_variant": kernel_variant,
+                    "source_dtype": source_dtype,
                 }
             )
             return None
-        block_n, block_k, num_warps = _apl_launch_dims()
+        block_n, block_k, num_warps = _apl_launch_dims(bits)
         if block_k % 32 != 0:
             raise ValueError(f"APL BLOCK_K must be divisible by 32, got {block_k}")
         grid = (M, triton.cdiv(N_orig, block_n))
@@ -853,6 +971,10 @@ def _install() -> None:
                 "K": K_orig,
                 "K_padded": K_padded,
                 "bits": bits,
+                "layout_version": layout_version,
+                "quantizer_version": quantizer_version,
+                "kernel_variant": kernel_variant,
+                "source_dtype": source_dtype,
                 "block_n": block_n,
                 "block_k": block_k,
                 "num_warps": num_warps,
